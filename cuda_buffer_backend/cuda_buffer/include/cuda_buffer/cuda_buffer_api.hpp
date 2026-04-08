@@ -27,6 +27,50 @@
 namespace cuda_buffer_backend
 {
 
+namespace detail
+{
+
+template<typename T>
+CudaBufferImpl<T> * get_cuda_impl(rosidl::Buffer<T> & buffer)
+{
+  if (buffer.get_backend_type() != "cuda") {
+    throw CudaError(
+            "from_buffer called on non-CUDA buffer (backend: " +
+            buffer.get_backend_type() + ")");
+  }
+  const auto * impl = buffer.get_impl();
+  if (!impl) {
+    throw CudaError("from_buffer called on buffer with null implementation");
+  }
+  auto * cuda_impl = const_cast<CudaBufferImpl<T> *>(
+    dynamic_cast<const CudaBufferImpl<T> *>(impl));
+  if (!cuda_impl) {
+    throw CudaError("from_buffer: failed to cast buffer impl to CudaBufferImpl");
+  }
+  return cuda_impl;
+}
+
+template<typename T>
+const CudaBufferImpl<T> * get_cuda_impl(const rosidl::Buffer<T> & buffer)
+{
+  if (buffer.get_backend_type() != "cuda") {
+    throw CudaError(
+            "from_buffer called on non-CUDA buffer (backend: " +
+            buffer.get_backend_type() + ")");
+  }
+  const auto * impl = buffer.get_impl();
+  if (!impl) {
+    throw CudaError("from_buffer called on buffer with null implementation");
+  }
+  const auto * cuda_impl = dynamic_cast<const CudaBufferImpl<T> *>(impl);
+  if (!cuda_impl) {
+    throw CudaError("from_buffer: failed to cast buffer impl to CudaBufferImpl");
+  }
+  return cuda_impl;
+}
+
+}  // namespace detail
+
 /// \brief Allocate a ROS message with a CUDA-backed buffer of \p count elements.
 /// \tparam MsgT ROS message type whose `data` field is a `rosidl::Buffer<uint8_t>`.
 /// \param count Number of uint8_t elements to allocate on the GPU.
@@ -51,20 +95,7 @@ WriteHandle from_buffer(
   rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
-  if (buffer.get_backend_type() != "cuda") {
-    throw CudaError(
-            "from_buffer called on non-CUDA buffer (backend: " +
-            buffer.get_backend_type() + ")");
-  }
-  const auto * impl = buffer.get_impl();
-  if (!impl) {
-    throw CudaError("from_buffer called on buffer with null implementation");
-  }
-  auto * cuda_impl = const_cast<CudaBufferImpl<T> *>(
-    dynamic_cast<const CudaBufferImpl<T> *>(impl));
-  if (!cuda_impl) {
-    throw CudaError("from_buffer: failed to cast buffer impl to CudaBufferImpl");
-  }
+  auto * cuda_impl = detail::get_cuda_impl(buffer);
   cuda_impl->set_stream(stream);
   return cuda_impl->get_cuda_buffer().get_write_handle(stream);
 }
@@ -80,19 +111,7 @@ ReadHandle from_buffer(
   const rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
-  if (buffer.get_backend_type() != "cuda") {
-    throw CudaError(
-            "from_buffer called on non-CUDA buffer (backend: " +
-            buffer.get_backend_type() + ")");
-  }
-  const auto * impl = buffer.get_impl();
-  if (!impl) {
-    throw CudaError("from_buffer called on buffer with null implementation");
-  }
-  const auto * cuda_impl = dynamic_cast<const CudaBufferImpl<T> *>(impl);
-  if (!cuda_impl) {
-    throw CudaError("from_buffer: failed to cast buffer impl to CudaBufferImpl");
-  }
+  const auto * cuda_impl = detail::get_cuda_impl(buffer);
   return cuda_impl->get_cuda_buffer().get_read_handle(stream);
 }
 

@@ -75,15 +75,15 @@ private:
     }
 
     if (backend_type == "torch" && !msg->data.empty()) {
-      size_t expected_size = msg->data.size();
+      size_t buffer_byte_size = msg->data.size();
       const rosidl::Buffer<uint8_t> & data = msg->data;
       at::Tensor tensor = torch_buffer_backend::from_buffer(data);
 
       at::Tensor cpu_tensor = tensor.contiguous().cpu();
-      if (cpu_tensor.numel() != static_cast<int64_t>(expected_size)) {
+      if (cpu_tensor.numel() != static_cast<int64_t>(buffer_byte_size)) {
         RCLCPP_ERROR(this->get_logger(),
           "Tensor element count mismatch: %ld vs %zu",
-          cpu_tensor.numel(), expected_size);
+          cpu_tensor.numel(), buffer_byte_size);
         msg_valid = false;
       }
 

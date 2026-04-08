@@ -15,7 +15,6 @@
 #ifndef TORCH_BUFFER__TORCH_BUFFER_IMPL_HPP_
 #define TORCH_BUFFER__TORCH_BUFFER_IMPL_HPP_
 
-#include <torch/torch.h>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -25,7 +24,6 @@
 #include "rosidl_buffer/buffer.hpp"
 #include "rosidl_buffer/buffer_impl_base.hpp"
 #include "rosidl_buffer/cpu_buffer_impl.hpp"
-#include "torch_buffer/torch_buffer_utils.hpp"
 
 namespace torch_buffer_backend
 {
@@ -129,9 +127,6 @@ public:
   }
 
 private:
-  template<typename U>
-  friend class TorchBufferImpl;
-
   rosidl::Buffer<uint8_t> device_buffer_;
   std::vector<int64_t> shape_;
   std::vector<int64_t> strides_;

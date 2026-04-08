@@ -15,10 +15,9 @@
 #ifndef CUDA_BUFFER__CUDA_BUFFER_IMPL_HPP_
 #define CUDA_BUFFER__CUDA_BUFFER_IMPL_HPP_
 
-#include <cstring>
+#include <algorithm>
 #include <memory>
 #include <mutex>
-#include <vector>
 
 #include "cuda_buffer/cuda_buffer.hpp"
 #include "cuda_buffer/cuda_error.hpp"

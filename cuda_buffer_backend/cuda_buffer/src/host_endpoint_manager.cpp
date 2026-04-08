@@ -16,6 +16,7 @@
 
 #include <fcntl.h>
 #include <semaphore.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -76,6 +77,32 @@ static_assert(
 static_assert(
   alignof(EndpointEntry) >= 8,
   "EndpointEntry must have at least 8-byte alignment");
+
+static size_t purge_dead_entries(EndpointRegistry * registry)
+{
+  size_t purged = 0;
+  for (size_t i = 0; i < registry->num_entries; ++i) {
+    if (!registry->entries[i].active) {
+      continue;
+    }
+    pid_t pid = static_cast<pid_t>(registry->entries[i].instance_id >> 32);
+    if (pid > 0 && kill(pid, 0) != 0 && errno == ESRCH) {
+      registry->entries[i].active = false;
+      ++purged;
+    }
+  }
+  return purged;
+}
+
+static bool has_active_entries(const EndpointRegistry * registry)
+{
+  for (size_t i = 0; i < registry->num_entries; ++i) {
+    if (registry->entries[i].active) {
+      return true;
+    }
+  }
+  return false;
+}
 
 std::mutex HostEndpointManager::instances_mutex_;
 std::unordered_map<size_t, std::weak_ptr<HostEndpointManager>>
@@ -199,6 +226,13 @@ HostEndpointManager::HostEndpointManager(size_t domain_id)
       "Initialized shared memory registry for domain %zu on host %s",
       domain_id, hostname_.c_str());
   } else {
+    size_t purged = purge_dead_entries(registry);
+    if (purged > 0) {
+      RCUTILS_LOG_INFO_NAMED(
+        "host_endpoint_manager",
+        "Purged %zu stale entries from dead processes in domain %zu",
+        purged, domain_id);
+    }
     RCUTILS_LOG_INFO_NAMED(
       "host_endpoint_manager",
       "Attached to existing shared memory registry for domain %zu", domain_id);
@@ -209,6 +243,8 @@ HostEndpointManager::HostEndpointManager(size_t domain_id)
 
 HostEndpointManager::~HostEndpointManager()
 {
+  bool should_unlink = false;
+
   if (shm_ptr_ != nullptr && shm_ptr_ != MAP_FAILED) {
     auto * registry = static_cast<EndpointRegistry *>(shm_ptr_);
     sem_t * sem = static_cast<sem_t *>(shm_mutex_);
@@ -228,6 +264,9 @@ HostEndpointManager::~HostEndpointManager()
           registry->entries[i].active = false;
         }
       }
+      purge_dead_entries(registry);
+      should_unlink = !has_active_entries(registry);
+
       sem_post(sem);
       sem_close(sem);
     }
@@ -237,6 +276,11 @@ HostEndpointManager::~HostEndpointManager()
 
   if (shm_fd_ >= 0) {
     close(shm_fd_);
+  }
+
+  if (should_unlink) {
+    shm_unlink(shm_name_.c_str());
+    sem_unlink((shm_name_ + "_mtx").c_str());
   }
 }
 

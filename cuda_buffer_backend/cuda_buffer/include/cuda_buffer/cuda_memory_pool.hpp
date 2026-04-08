@@ -41,7 +41,6 @@ struct IPCMetadata
   std::atomic<int32_t> refcount{0};
   std::atomic<uint64_t> uid{0};
   std::atomic<uint64_t> publish_timestamp_us{0};
-  std::atomic<int32_t> futex_word{0};
 };
 
 /// \brief VMM allocation block with optional pre-exported IPC handle.
@@ -52,7 +51,6 @@ struct VmmBlock
   size_t size{0};
   int exported_fd{-1};
   uint32_t block_id{0};
-  std::string socket_path;
 
   IPCMetadata * ipc_meta{nullptr};
   int shm_fd{-1};
@@ -122,8 +120,6 @@ public:
   }
 
   bool is_ipc_capable() const {return ipc_capable_;}
-  int device_id() const {return device_id_;}
-  size_t granularity() const {return granularity_;}
 
 private:
   bool is_block_ready(VmmBlock * block) const;

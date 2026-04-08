@@ -15,10 +15,8 @@
 #include "cuda_buffer/cuda_memory_pool.hpp"
 
 #include <fcntl.h>
-#include <linux/futex.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -52,6 +50,7 @@ CudaMemoryPool::~CudaMemoryPool()
       cuMemRelease(block->handle);
     }
   }
+  cudaDeviceReset();
 }
 
 CUresult CudaMemoryPool::create()
@@ -246,6 +245,7 @@ VmmBlock * CudaMemoryPool::create_block(size_t aligned_size)
         block->shm_name = shm_name;
       } else {
         close(shm_fd);
+        shm_unlink(shm_name.c_str());
       }
     }
   }

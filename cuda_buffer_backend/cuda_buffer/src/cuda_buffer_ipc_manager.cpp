@@ -37,6 +37,36 @@
 namespace cuda_buffer_backend
 {
 
+namespace
+{
+
+void check_uid_staleness(
+  IPCMetadata * meta,
+  uint32_t block_id,
+  int32_t pid,
+  uint64_t expected_uid)
+{
+  if (!meta || expected_uid == 0) {return;}
+  uint64_t current = meta->uid.load(std::memory_order_acquire);
+  if (current != expected_uid) {
+    RCUTILS_LOG_WARN_NAMED("cuda_ipc",
+      "Stale block %u from pid %d: descriptor uid %lu, current uid %lu; dropping",
+      block_id, pid, expected_uid, current);
+    throw CudaError("IPC block recycled before import (stale UID)");
+  }
+}
+
+struct sockaddr_un make_unix_addr(const std::string & path)
+{
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+  return addr;
+}
+
+}  // namespace
+
 struct ImportCacheKey
 {
   int32_t pid;
@@ -73,8 +103,23 @@ struct CachedImport
   CachedImport & operator=(CachedImport && other) noexcept;
 };
 
-static std::unordered_map<ImportCacheKey, CachedImport, ImportCacheKeyHash> import_cache;
-static std::mutex import_cache_mutex;
+// Intentionally leaked: the map is heap-allocated and never destroyed so that
+// CachedImport destructors (which call cuMemUnmap / cuMemRelease) do not run
+// during static destruction when the CUDA driver may already be torn down.
+// The CUDA driver reclaims all VMM resources on context destruction.
+static std::unordered_map<ImportCacheKey, CachedImport, ImportCacheKeyHash> &
+get_import_cache()
+{
+  static auto * cache =
+    new std::unordered_map<ImportCacheKey, CachedImport, ImportCacheKeyHash>();
+  return *cache;
+}
+
+static std::mutex & get_import_cache_mutex()
+{
+  static auto * mtx = new std::mutex();
+  return *mtx;
+}
 
 CachedImport::~CachedImport()
 {
@@ -396,34 +441,27 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
 {
   ImportCacheKey cache_key{pid, block_id};
 
-  std::lock_guard<std::mutex> lock(import_cache_mutex);
+  auto & cache = get_import_cache();
+  std::lock_guard<std::mutex> lock(get_import_cache_mutex());
 
   static uint32_t import_count = 0;
   if (++import_count % 256 == 0) {
-    auto cit = import_cache.begin();
-    while (cit != import_cache.end()) {
+    auto cit = cache.begin();
+    while (cit != cache.end()) {
       if (kill(cit->first.pid, 0) != 0 && errno == ESRCH &&
         cit->second.use_count.load() == 0)
       {
-        cit = import_cache.erase(cit);
+        cit = cache.erase(cit);
       } else {
         ++cit;
       }
     }
   }
 
-  auto it = import_cache.find(cache_key);
-  if (it != import_cache.end()) {
+  auto it = cache.find(cache_key);
+  if (it != cache.end()) {
     IPCMetadata * meta = it->second.ipc_meta;
-    if (meta && expected_uid != 0) {
-      uint64_t current = meta->uid.load(std::memory_order_acquire);
-      if (current != expected_uid) {
-        RCUTILS_LOG_WARN_NAMED("cuda_ipc",
-          "Stale block %u from pid %d: descriptor uid %lu, current uid %lu; dropping",
-          block_id, pid, expected_uid, current);
-        throw CudaError("IPC block recycled before import (stale UID)");
-      }
-    }
+    check_uid_staleness(meta, block_id, pid, expected_uid);
     if (meta) {
       meta->refcount.fetch_add(1, std::memory_order_acq_rel);
     }
@@ -444,15 +482,11 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
     }
   }
 
-  if (ipc_meta && expected_uid != 0) {
-    uint64_t current = ipc_meta->uid.load(std::memory_order_acquire);
-    if (current != expected_uid) {
-      RCUTILS_LOG_WARN_NAMED("cuda_ipc",
-        "Stale block %u from pid %d: descriptor uid %lu, current uid %lu; dropping",
-        block_id, pid, expected_uid, current);
-      munmap(ipc_meta, sizeof(IPCMetadata));
-      throw CudaError("IPC block recycled before import (stale UID)");
-    }
+  try {
+    check_uid_staleness(ipc_meta, block_id, pid, expected_uid);
+  } catch (...) {
+    if (ipc_meta) {munmap(ipc_meta, sizeof(IPCMetadata));}
+    throw;
   }
 
   if (ipc_meta) {
@@ -524,7 +558,7 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
     throw CudaError(__FILE__, __LINE__, "cuMemSetAccess", r);
   }
 
-  auto & cached = import_cache[cache_key];
+  auto & cached = cache[cache_key];
   cached.handle = handle;
   cached.va = va;
   cached.size = size;
@@ -537,9 +571,10 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
 void CudaVmmIPCManager::release_import(int32_t pid, uint32_t block_id)
 {
   ImportCacheKey key{pid, block_id};
-  std::lock_guard<std::mutex> lock(import_cache_mutex);
-  auto it = import_cache.find(key);
-  if (it != import_cache.end()) {
+  auto & cache = get_import_cache();
+  std::lock_guard<std::mutex> lock(get_import_cache_mutex());
+  auto it = cache.find(key);
+  if (it != cache.end()) {
     it->second.use_count.fetch_sub(1);
   }
 }
@@ -553,11 +588,7 @@ int CudaVmmIPCManager::create_fd_server_socket(const std::string & socket_path)
     return -1;
   }
 
-  struct sockaddr_un addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
-
+  auto addr = make_unix_addr(socket_path);
   if (bind(server_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     close(server_socket);
     return -1;
@@ -579,11 +610,7 @@ int CudaVmmIPCManager::receive_fd_from_socket(const std::string & socket_path)
     return -1;
   }
 
-  struct sockaddr_un addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
-
+  auto addr = make_unix_addr(socket_path);
   if (connect(client_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     close(client_socket);
     return -1;

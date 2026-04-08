@@ -14,8 +14,6 @@
 
 #include "cuda_buffer_backend/cuda_buffer_backend.hpp"
 
-#include <linux/futex.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -238,8 +236,6 @@ std::unique_ptr<void, void (*)(void *)> CudaBufferBackend::from_descriptor_with_
       auto deleter = [meta, src_pid, src_block](uint8_t *) {
           if (meta) {
             meta->refcount.fetch_sub(1, std::memory_order_release);
-            meta->futex_word.store(1, std::memory_order_release);
-            syscall(SYS_futex, &meta->futex_word, FUTEX_WAKE, 1);
           }
           CudaVmmIPCManager::release_import(src_pid, src_block);
         };

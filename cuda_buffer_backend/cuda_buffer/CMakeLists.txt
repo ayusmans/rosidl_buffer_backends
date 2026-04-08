@@ -17,6 +17,7 @@ find_package(rcutils REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
+  src/cuda_buffer.cpp
   src/cuda_buffer_ipc_manager.cpp
   src/cuda_memory_pool.cpp
   src/host_endpoint_manager.cpp
@@ -70,6 +71,19 @@ if(BUILD_TESTING)
   )
   if(TARGET test_cuda_buffer)
     target_link_libraries(test_cuda_buffer
+      ${PROJECT_NAME}
+      rosidl_buffer::rosidl_buffer
+      CUDA::cudart
+      CUDA::cuda_driver
+      rt
+    )
+  endif()
+
+  ament_add_gtest(test_shm_cleanup
+    test/test_shm_cleanup.cpp
+  )
+  if(TARGET test_shm_cleanup)
+    target_link_libraries(test_shm_cleanup
       ${PROJECT_NAME}
       rosidl_buffer::rosidl_buffer
       CUDA::cudart

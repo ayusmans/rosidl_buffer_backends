@@ -34,15 +34,10 @@ public:
 
   CudaError(const char * file, int line, const char * expr, cudaError_t err)
   : std::runtime_error(
-      format_error(file, line, expr, cudaGetErrorName(err), cudaGetErrorString(err))),
-    cuda_error_(err) {}
+      format_error(file, line, expr, cudaGetErrorName(err), cudaGetErrorString(err))) {}
 
   CudaError(const char * file, int line, const char * expr, CUresult err)
-  : std::runtime_error(format_driver_error(file, line, expr, err)),
-    driver_error_(err) {}
-
-  cudaError_t cuda_error() const {return cuda_error_;}
-  CUresult driver_error() const {return driver_error_;}
+  : std::runtime_error(format_driver_error(file, line, expr, err)) {}
 
 private:
   static std::string format_error(
@@ -68,8 +63,6 @@ private:
       desc ? desc : "no description");
   }
 
-  cudaError_t cuda_error_{cudaSuccess};
-  CUresult driver_error_{CUDA_SUCCESS};
 };
 
 inline bool cuda_error_is_safe(cudaError_t e)

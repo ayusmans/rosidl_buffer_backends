@@ -200,6 +200,20 @@ inline at::Tensor cpu_wrap(
 
 #ifdef TORCH_BUFFER_DEVICE_CUDA
 
+inline cudaStream_t get_current_cuda_stream(const char * context)
+{
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
+  if (stream == nullptr) {
+    RCUTILS_LOG_WARN_NAMED(
+      "torch_buffer",
+      "%s: current CUDA stream is the default stream (nullptr). "
+      "Event-based synchronization is disabled; all operations will be synchronous. "
+      "Set a non-default stream with c10::cuda::CUDAStreamGuard before calling from_buffer.",
+      context);
+  }
+  return stream;
+}
+
 inline at::Tensor cuda_wrap_writable(
   const TorchBufferImpl<uint8_t> * impl,
   const std::vector<int64_t> & shape,
@@ -212,14 +226,7 @@ inline at::Tensor cuda_wrap_writable(
   if (!cuda_impl) {
     throw std::runtime_error("from_buffer (write): device buffer is not a CudaBufferImpl");
   }
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
-  if (stream == nullptr) {
-    RCUTILS_LOG_WARN_NAMED(
-      "torch_buffer",
-      "from_buffer (write): current CUDA stream is the default stream (nullptr). "
-      "Event-based synchronization is disabled; all operations will be synchronous. "
-      "Set a non-default stream with c10::cuda::CUDAStreamGuard before calling from_buffer.");
-  }
+  cudaStream_t stream = get_current_cuda_stream("from_buffer (write)");
   cuda_impl->set_stream(stream);
   auto wh = std::make_shared<cuda_buffer_backend::WriteHandle>(
     cuda_impl->get_cuda_buffer().get_write_handle(stream));
@@ -242,14 +249,7 @@ inline at::Tensor cuda_wrap_readable(
   if (!cuda_impl) {
     throw std::runtime_error("from_buffer (read): device buffer is not a CudaBufferImpl");
   }
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
-  if (stream == nullptr) {
-    RCUTILS_LOG_WARN_NAMED(
-      "torch_buffer",
-      "from_buffer (read): current CUDA stream is the default stream (nullptr). "
-      "Event-based synchronization is disabled; all operations will be synchronous. "
-      "Set a non-default stream with c10::cuda::CUDAStreamGuard before calling from_buffer.");
-  }
+  cudaStream_t stream = get_current_cuda_stream("from_buffer (read)");
   auto rh = std::make_shared<cuda_buffer_backend::ReadHandle>(
     cuda_impl->get_cuda_buffer().get_read_handle(stream));
   void * ptr = const_cast<void *>(static_cast<const void *>(rh->get_ptr()));
@@ -261,7 +261,8 @@ inline at::Tensor cuda_wrap_readable(
 
 #endif  // TORCH_BUFFER_DEVICE_CUDA
 
-inline at::Tensor wrap_writable(
+template<bool Writable>
+inline at::Tensor wrap_impl(
   const TorchBufferImpl<uint8_t> * impl,
   const std::vector<int64_t> & shape,
   const std::vector<int64_t> & strides,
@@ -270,25 +271,8 @@ inline at::Tensor wrap_writable(
   const std::string & backend = impl->get_device_buffer().get_backend_type();
 #ifdef TORCH_BUFFER_DEVICE_CUDA
   if (backend == "cuda") {
-    return cuda_wrap_writable(impl, shape, strides, dtype);
-  }
-#endif
-  if (backend == "cpu") {
-    return cpu_wrap(impl, shape, strides, dtype);
-  }
-  throw std::runtime_error("from_buffer: unsupported backend '" + backend + "'");
-}
-
-inline at::Tensor wrap_readable(
-  const TorchBufferImpl<uint8_t> * impl,
-  const std::vector<int64_t> & shape,
-  const std::vector<int64_t> & strides,
-  at::ScalarType dtype)
-{
-  const std::string & backend = impl->get_device_buffer().get_backend_type();
-#ifdef TORCH_BUFFER_DEVICE_CUDA
-  if (backend == "cuda") {
-    return cuda_wrap_readable(impl, shape, strides, dtype);
+    if constexpr (Writable) {return cuda_wrap_writable(impl, shape, strides, dtype);}
+    else {return cuda_wrap_readable(impl, shape, strides, dtype);}
   }
 #endif
   if (backend == "cpu") {
@@ -305,7 +289,7 @@ inline at::Tensor from_buffer(rosidl::Buffer<uint8_t> & buffer)
   if (buffer.empty()) {return {};}
   const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
   at::ScalarType dtype = string_to_scalar_type(impl->dtype());
-  return detail::wrap_writable(impl, impl->shape(), impl->strides(), dtype);
+  return detail::wrap_impl<true>(impl, impl->shape(), impl->strides(), dtype);
 }
 
 /// \brief Get a read-only tensor view of a torch buffer (uses stored metadata).
@@ -314,7 +298,7 @@ inline at::Tensor from_buffer(const rosidl::Buffer<uint8_t> & buffer)
   if (buffer.empty()) {return {};}
   const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
   at::ScalarType dtype = string_to_scalar_type(impl->dtype());
-  return detail::wrap_readable(impl, impl->shape(), impl->strides(), dtype);
+  return detail::wrap_impl<false>(impl, impl->shape(), impl->strides(), dtype);
 }
 
 /// \brief Get a writable tensor view with explicit shape, strides, and dtype.
@@ -326,7 +310,7 @@ inline at::Tensor from_buffer(
 {
   if (buffer.empty()) {return {};}
   const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
-  return detail::wrap_writable(impl, shape, strides, dtype);
+  return detail::wrap_impl<true>(impl, shape, strides, dtype);
 }
 
 /// \brief Get a read-only tensor view with explicit shape, strides, and dtype.
@@ -338,7 +322,7 @@ inline at::Tensor from_buffer(
 {
   if (buffer.empty()) {return {};}
   const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
-  return detail::wrap_readable(impl, shape, strides, dtype);
+  return detail::wrap_impl<false>(impl, shape, strides, dtype);
 }
 
 }  // namespace torch_buffer_backend
