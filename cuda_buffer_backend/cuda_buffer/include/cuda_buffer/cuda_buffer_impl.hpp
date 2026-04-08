@@ -15,9 +15,13 @@
 #ifndef CUDA_BUFFER__CUDA_BUFFER_IMPL_HPP_
 #define CUDA_BUFFER__CUDA_BUFFER_IMPL_HPP_
 
+#include <rcutils/logging_macros.h>
+
 #include <algorithm>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <utility>
 
 #include "cuda_buffer/cuda_buffer.hpp"
 #include "cuda_buffer/cuda_error.hpp"
@@ -28,6 +32,18 @@
 
 namespace cuda_buffer_backend
 {
+
+// Process-wide stream for internal ops (clone, to_cpu, resize).
+// Intentionally leaked; destroyed by cudaDeviceReset in ~CudaMemoryPool.
+inline cudaStream_t get_internal_stream()
+{
+  static cudaStream_t s = [] {
+      cudaStream_t stream = nullptr;
+      cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+      return stream;
+    }();
+  return s;
+}
 
 template<typename T>
 class CudaBufferImpl : public rosidl::BufferImplBase<T>
@@ -73,11 +89,13 @@ public:
     allocate_buffer_internal(new_buffer, n);
 
     if (size_ > 0 && cuda_buffer_.size() > 0) {
+      cudaStream_t s = stream_ ? stream_ : get_internal_stream();
       size_t copy_size = std::min(n, size_) * sizeof(T);
+      ReadHandle rh = cuda_buffer_.get_read_handle(s);
+      WriteHandle wh = new_buffer.get_write_handle(s);
       CUDA_CHECK(cudaMemcpyAsync(
-        new_buffer.get_device_ptr(), cuda_buffer_.get_device_ptr(),
-        copy_size, cudaMemcpyDeviceToDevice, stream_));
-      CUDA_CHECK(cudaStreamSynchronize(stream_));
+        wh.get_ptr(), rh.get_ptr(),
+        copy_size, cudaMemcpyDeviceToDevice, s));
     }
 
     cuda_buffer_ = std::move(new_buffer);
@@ -96,10 +114,12 @@ public:
     cpu->get_storage().resize(size_);
 
     if (size_ > 0 && cuda_buffer_.size() > 0) {
+      cudaStream_t s = stream_ ? stream_ : get_internal_stream();
+      ReadHandle rh = cuda_buffer_.get_read_handle(s);
       CUDA_CHECK(cudaMemcpyAsync(
-        cpu->get_storage().data(), cuda_buffer_.get_device_ptr(),
-        size_ * sizeof(T), cudaMemcpyDeviceToHost, stream_));
-      CUDA_CHECK(cudaStreamSynchronize(stream_));
+        cpu->get_storage().data(), rh.get_ptr(),
+        size_ * sizeof(T), cudaMemcpyDeviceToHost, s));
+      CUDA_CHECK(cudaStreamSynchronize(s));
     }
 
     return cpu;
@@ -110,10 +130,12 @@ public:
     auto copy = std::make_unique<CudaBufferImpl<T>>(size_);
 
     if (size_ > 0 && cuda_buffer_.size() > 0) {
+      cudaStream_t s = stream_ ? stream_ : get_internal_stream();
+      ReadHandle rh = cuda_buffer_.get_read_handle(s);
+      WriteHandle wh = copy->cuda_buffer_.get_write_handle(s);
       CUDA_CHECK(cudaMemcpyAsync(
-        copy->cuda_buffer_.get_device_ptr(), cuda_buffer_.get_device_ptr(),
-        size_ * sizeof(T), cudaMemcpyDeviceToDevice, stream_));
-      CUDA_CHECK(cudaStreamSynchronize(stream_));
+        wh.get_ptr(), rh.get_ptr(),
+        size_ * sizeof(T), cudaMemcpyDeviceToDevice, s));
     }
 
     return copy;

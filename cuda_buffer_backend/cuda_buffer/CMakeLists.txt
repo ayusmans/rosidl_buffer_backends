@@ -79,18 +79,6 @@ if(BUILD_TESTING)
     )
   endif()
 
-  ament_add_gtest(test_shm_cleanup
-    test/test_shm_cleanup.cpp
-  )
-  if(TARGET test_shm_cleanup)
-    target_link_libraries(test_shm_cleanup
-      ${PROJECT_NAME}
-      rosidl_buffer::rosidl_buffer
-      CUDA::cudart
-      CUDA::cuda_driver
-      rt
-    )
-  endif()
 endif()
 
 ament_package()

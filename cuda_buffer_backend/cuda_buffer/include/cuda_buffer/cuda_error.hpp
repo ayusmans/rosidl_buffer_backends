@@ -62,7 +62,6 @@ private:
       name ? name : "UNKNOWN",
       desc ? desc : "no description");
   }
-
 };
 
 inline bool cuda_error_is_safe(cudaError_t e)

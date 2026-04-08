@@ -20,7 +20,7 @@
 #include "cuda_buffer/cuda_buffer_api.hpp"
 #include "rosidl_buffer/buffer.hpp"
 
-class CudaBufferAccessTest : public ::testing::Test
+class CudaBufferTest : public ::testing::Test
 {
 protected:
   void SetUp() override
@@ -62,7 +62,7 @@ protected:
   cudaStream_t stream2_{nullptr};
 };
 
-TEST_F(CudaBufferAccessTest, AllocateAndWriteHandle)
+TEST_F(CudaBufferTest, AllocateAndWriteHandle)
 {
   rosidl::Buffer<uint8_t> buffer;
   allocate_buffer(buffer, 1024);
@@ -75,7 +75,7 @@ TEST_F(CudaBufferAccessTest, AllocateAndWriteHandle)
   EXPECT_EQ(1024u, buffer.size());
 }
 
-TEST_F(CudaBufferAccessTest, FromBuffer_ThrowsOnCpuBuffer)
+TEST_F(CudaBufferTest, FromBuffer_ThrowsOnCpuBuffer)
 {
   rosidl::Buffer<uint8_t> buffer(64);
   const rosidl::Buffer<uint8_t> & cbuf = buffer;
@@ -85,7 +85,7 @@ TEST_F(CudaBufferAccessTest, FromBuffer_ThrowsOnCpuBuffer)
     cuda_buffer_backend::CudaError);
 }
 
-TEST_F(CudaBufferAccessTest, FromBuffer_ThrowsOnEmptyBuffer)
+TEST_F(CudaBufferTest, FromBuffer_ThrowsOnEmptyBuffer)
 {
   rosidl::Buffer<uint8_t> buffer;
   const rosidl::Buffer<uint8_t> & cbuf = buffer;
@@ -95,7 +95,7 @@ TEST_F(CudaBufferAccessTest, FromBuffer_ThrowsOnEmptyBuffer)
     cuda_buffer_backend::CudaError);
 }
 
-TEST_F(CudaBufferAccessTest, ToBuffer_CopiesFromDevicePointer)
+TEST_F(CudaBufferTest, ToBuffer_CopiesFromDevicePointer)
 {
   constexpr size_t N = 512;
   rosidl::Buffer<uint8_t> buffer;
@@ -123,7 +123,7 @@ TEST_F(CudaBufferAccessTest, ToBuffer_CopiesFromDevicePointer)
   }
 }
 
-TEST_F(CudaBufferAccessTest, ToBuffer_CopiesFromHostPointer)
+TEST_F(CudaBufferTest, ToBuffer_CopiesFromHostPointer)
 {
   constexpr size_t N = 256;
   rosidl::Buffer<uint8_t> buffer;
@@ -147,7 +147,7 @@ TEST_F(CudaBufferAccessTest, ToBuffer_CopiesFromHostPointer)
   }
 }
 
-TEST_F(CudaBufferAccessTest, EventSync_WriteOnStream1_ReadOnStream2)
+TEST_F(CudaBufferTest, EventSync_WriteOnStream1_ReadOnStream2)
 {
   constexpr size_t N = 1024;
   rosidl::Buffer<uint8_t> buffer;
@@ -173,7 +173,7 @@ TEST_F(CudaBufferAccessTest, EventSync_WriteOnStream1_ReadOnStream2)
   }
 }
 
-TEST_F(CudaBufferAccessTest, DoubleWriteHandle_Throws)
+TEST_F(CudaBufferTest, DoubleWriteHandle_Throws)
 {
   rosidl::Buffer<uint8_t> buffer;
   allocate_buffer(buffer, 256);
@@ -186,7 +186,7 @@ TEST_F(CudaBufferAccessTest, DoubleWriteHandle_Throws)
     cuda_buffer_backend::CudaError);
 }
 
-TEST_F(CudaBufferAccessTest, WriteAfterFinalized_Throws)
+TEST_F(CudaBufferTest, WriteAfterFinalized_Throws)
 {
   rosidl::Buffer<uint8_t> buffer;
   allocate_buffer(buffer, 256);
@@ -201,7 +201,7 @@ TEST_F(CudaBufferAccessTest, WriteAfterFinalized_Throws)
     cuda_buffer_backend::CudaError);
 }
 
-TEST_F(CudaBufferAccessTest, ReadAfterReadEvents_BlocksWrite)
+TEST_F(CudaBufferTest, ReadAfterReadEvents_BlocksWrite)
 {
   rosidl::Buffer<uint8_t> buffer;
   allocate_buffer(buffer, 256);
@@ -222,7 +222,96 @@ TEST_F(CudaBufferAccessTest, ReadAfterReadEvents_BlocksWrite)
     cuda_buffer_backend::CudaError);
 }
 
-TEST_F(CudaBufferAccessTest, GpuPipeline_NoIntermediateCpuSync)
+TEST_F(CudaBufferTest, Clone_PreservesData)
+{
+  constexpr size_t N = 512;
+  rosidl::Buffer<uint8_t> buffer;
+  allocate_buffer(buffer, N);
+
+  {
+    cuda_buffer_backend::WriteHandle wh =
+      cuda_buffer_backend::from_buffer(buffer, stream1_);
+    write_pattern(wh.get_ptr(), N, 77, stream1_);
+  }
+
+  auto * impl = const_cast<cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(
+    dynamic_cast<const cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(buffer.get_impl()));
+  impl->set_stream(nullptr);
+
+  auto cloned_impl = impl->clone();
+  auto * cloned_cuda = dynamic_cast<cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(
+    cloned_impl.get());
+  ASSERT_NE(nullptr, cloned_cuda);
+
+  const auto & cbuf = cloned_cuda->get_cuda_buffer();
+  cuda_buffer_backend::ReadHandle rh = cbuf.get_read_handle(stream2_);
+  std::vector<uint8_t> result = read_to_host(rh.get_ptr(), N, stream2_);
+
+  for (size_t i = 0; i < N; ++i) {
+    EXPECT_EQ(static_cast<uint8_t>((77 + i) % 256), result[i])
+      << "Clone mismatch at index " << i;
+  }
+}
+
+TEST_F(CudaBufferTest, ToCpu_PreservesData)
+{
+  constexpr size_t N = 1024;
+  rosidl::Buffer<uint8_t> buffer;
+  allocate_buffer(buffer, N);
+
+  {
+    cuda_buffer_backend::WriteHandle wh =
+      cuda_buffer_backend::from_buffer(buffer, stream1_);
+    write_pattern(wh.get_ptr(), N, 55, stream1_);
+  }
+
+  auto * impl = const_cast<cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(
+    dynamic_cast<const cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(buffer.get_impl()));
+  impl->set_stream(nullptr);
+
+  auto cpu_impl = buffer.get_impl()->to_cpu();
+  ASSERT_NE(nullptr, cpu_impl);
+
+  auto * cpu = dynamic_cast<rosidl::CpuBufferImpl<uint8_t> *>(cpu_impl.get());
+  ASSERT_NE(nullptr, cpu);
+  ASSERT_EQ(N, cpu->get_storage().size());
+
+  for (size_t i = 0; i < N; ++i) {
+    EXPECT_EQ(static_cast<uint8_t>((55 + i) % 256), cpu->get_storage()[i])
+      << "to_cpu mismatch at index " << i;
+  }
+}
+
+TEST_F(CudaBufferTest, Resize_PreservesPrefix)
+{
+  constexpr size_t N = 512;
+  rosidl::Buffer<uint8_t> buffer;
+  allocate_buffer(buffer, N);
+
+  {
+    cuda_buffer_backend::WriteHandle wh =
+      cuda_buffer_backend::from_buffer(buffer, stream1_);
+    write_pattern(wh.get_ptr(), N, 88, stream1_);
+  }
+
+  auto * impl = const_cast<cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(
+    dynamic_cast<const cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(buffer.get_impl()));
+  impl->set_stream(nullptr);
+  impl->resize(N * 2);
+
+  EXPECT_EQ(N * 2, impl->size());
+
+  const auto & cbuf = impl->get_cuda_buffer();
+  cuda_buffer_backend::ReadHandle rh = cbuf.get_read_handle(stream2_);
+  std::vector<uint8_t> result = read_to_host(rh.get_ptr(), N, stream2_);
+
+  for (size_t i = 0; i < N; ++i) {
+    EXPECT_EQ(static_cast<uint8_t>((88 + i) % 256), result[i])
+      << "Resize prefix mismatch at index " << i;
+  }
+}
+
+TEST_F(CudaBufferTest, GpuPipeline_NoIntermediateCpuSync)
 {
   constexpr size_t N = 4096;
   rosidl::Buffer<uint8_t> src_buffer;

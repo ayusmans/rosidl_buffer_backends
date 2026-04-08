@@ -15,9 +15,11 @@
 #ifndef CUDA_BUFFER__CUDA_BUFFER_API_HPP_
 #define CUDA_BUFFER__CUDA_BUFFER_API_HPP_
 
-#include <memory>
-
 #include <cuda_runtime.h>
+
+#include <memory>
+#include <string>
+#include <utility>
 
 #include "cuda_buffer/cuda_buffer.hpp"
 #include "cuda_buffer/cuda_buffer_impl.hpp"

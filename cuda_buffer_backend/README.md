@@ -80,6 +80,29 @@ void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
 }  // ReadHandle destructor signals publisher that GPU work is complete
 ```
 
+### `from_buffer` handle rules
+
+`from_buffer` returns a **WriteHandle** when called with a non-const buffer, or a
+**ReadHandle** when called with a const buffer. The overload is selected at compile
+time based on const-ness of the reference you pass:
+
+```cpp
+// Write path -- use on a freshly allocated message before publish:
+cuda_buffer_backend::WriteHandle wh = cuda_buffer_backend::from_buffer(msg.data, stream);
+
+// Read path -- use const reference in the subscriber callback:
+const rosidl::Buffer<uint8_t> & data = msg->data;
+cuda_buffer_backend::ReadHandle rh = cuda_buffer_backend::from_buffer(data, stream);
+```
+
+- A **WriteHandle** can only be acquired once per buffer. It is intended for the
+  publisher to fill a freshly allocated message. Attempting to acquire a second
+  WriteHandle (or acquiring one after the write has been finalized) throws
+  `CudaError`.
+- To read a received buffer, always pass a **const reference**. If your subscriber
+  callback takes a non-const `SharedPtr` or `UniquePtr`, cast to const before
+  calling `from_buffer`:
+
 ## IPC Behavior
 
 The RMW layer calls `on_discovering_endpoint()` for each subscriber to decide between zero-copy IPC and CPU fallback:
@@ -89,7 +112,7 @@ The RMW layer calls `on_discovering_endpoint()` for each subscriber to decide be
 | Same host, same GPU, same user | Zero-copy via CUDA VMM IPC |
 | Different GPU, different user, different host, or VMM unavailable | CPU fallback via `to_cpu()` |
 
-The publisher's buffer destructor waits (via futex) for all IPC subscribers to release their handles before recycling the pool block.
+The publisher's pool checks a shared-memory refcount before recycling a block, ensuring all IPC subscribers have released their handles.
 
 ## License
 

@@ -14,11 +14,11 @@
 
 #include "cuda_buffer/cuda_buffer.hpp"
 
+#include <rcutils/logging_macros.h>
+
 #include <condition_variable>
 #include <deque>
 #include <thread>
-
-#include <rcutils/logging_macros.h>
 
 namespace cuda_buffer_backend
 {

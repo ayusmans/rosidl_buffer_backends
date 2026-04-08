@@ -22,13 +22,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <cuda_runtime.h>
+#include <rcutils/logging_macros.h>
+
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-
-#include <cuda_runtime.h>
-#include <rcutils/logging_macros.h>
 
 namespace host_endpoint_manager
 {

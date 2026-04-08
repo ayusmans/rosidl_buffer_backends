@@ -15,14 +15,14 @@
 #ifndef CUDA_BUFFER__CUDA_BUFFER_HPP_
 #define CUDA_BUFFER__CUDA_BUFFER_HPP_
 
+#include <cuda_runtime.h>
+
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
-
-#include <cuda_runtime.h>
 
 #include "cuda_buffer/cuda_buffer_handle.hpp"
 #include "cuda_buffer/cuda_error.hpp"

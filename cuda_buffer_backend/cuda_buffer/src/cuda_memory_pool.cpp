@@ -19,10 +19,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <rcutils/logging_macros.h>
+
 #include <chrono>
 #include <string>
-
-#include <rcutils/logging_macros.h>
 
 namespace cuda_buffer_backend
 {

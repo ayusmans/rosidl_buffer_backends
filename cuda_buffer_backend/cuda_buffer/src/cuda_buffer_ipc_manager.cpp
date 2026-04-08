@@ -15,7 +15,6 @@
 #include "cuda_buffer/cuda_buffer_ipc_manager.hpp"
 
 #include <fcntl.h>
-#include <signal.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
@@ -23,13 +22,13 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <rcutils/logging_macros.h>
+
 #include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <sstream>
 #include <thread>
-
-#include <rcutils/logging_macros.h>
 
 #include "cuda_buffer/cuda_error.hpp"
 #include "cuda_buffer/cuda_memory_pool.hpp"
@@ -93,8 +92,6 @@ struct CachedImport
   CUdeviceptr va{0};
   uint64_t size{0};
   IPCMetadata * ipc_meta{nullptr};
-  std::atomic<int32_t> use_count{0};
-
   ~CachedImport();
   CachedImport() = default;
   CachedImport(const CachedImport &) = delete;
@@ -318,7 +315,7 @@ void CudaVmmIPCManager::FDDispatcher::run()
 
       if (fd == event_fd_) {
         uint64_t val;
-        if (read(event_fd_, &val, sizeof(val)) < 0) {}
+        (void)read(event_fd_, &val, sizeof(val));
         continue;
       }
 
@@ -444,28 +441,18 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
   auto & cache = get_import_cache();
   std::lock_guard<std::mutex> lock(get_import_cache_mutex());
 
-  static uint32_t import_count = 0;
-  if (++import_count % 256 == 0) {
-    auto cit = cache.begin();
-    while (cit != cache.end()) {
-      if (kill(cit->first.pid, 0) != 0 && errno == ESRCH &&
-        cit->second.use_count.load() == 0)
-      {
-        cit = cache.erase(cit);
-      } else {
-        ++cit;
-      }
-    }
-  }
-
   auto it = cache.find(cache_key);
   if (it != cache.end()) {
     IPCMetadata * meta = it->second.ipc_meta;
-    check_uid_staleness(meta, block_id, pid, expected_uid);
     if (meta) {
       meta->refcount.fetch_add(1, std::memory_order_acq_rel);
     }
-    it->second.use_count.fetch_add(1);
+    try {
+      check_uid_staleness(meta, block_id, pid, expected_uid);
+    } catch (...) {
+      if (meta) {meta->refcount.fetch_sub(1, std::memory_order_release);}
+      throw;
+    }
     return {it->second.va, meta};
   }
 
@@ -482,15 +469,17 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
     }
   }
 
+  if (ipc_meta) {
+    ipc_meta->refcount.fetch_add(1, std::memory_order_acq_rel);
+  }
   try {
     check_uid_staleness(ipc_meta, block_id, pid, expected_uid);
   } catch (...) {
-    if (ipc_meta) {munmap(ipc_meta, sizeof(IPCMetadata));}
+    if (ipc_meta) {
+      ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
+      munmap(ipc_meta, sizeof(IPCMetadata));
+    }
     throw;
-  }
-
-  if (ipc_meta) {
-    ipc_meta->refcount.fetch_add(1, std::memory_order_acq_rel);
   }
 
   int fd = receive_fd_from_socket(socket_path);
@@ -563,20 +552,14 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
   cached.va = va;
   cached.size = size;
   cached.ipc_meta = ipc_meta;
-  cached.use_count.store(1);
 
   return {va, ipc_meta};
 }
 
 void CudaVmmIPCManager::release_import(int32_t pid, uint32_t block_id)
 {
-  ImportCacheKey key{pid, block_id};
-  auto & cache = get_import_cache();
-  std::lock_guard<std::mutex> lock(get_import_cache_mutex());
-  auto it = cache.find(key);
-  if (it != cache.end()) {
-    it->second.use_count.fetch_sub(1);
-  }
+  (void)pid;
+  (void)block_id;
 }
 
 int CudaVmmIPCManager::create_fd_server_socket(const std::string & socket_path)
