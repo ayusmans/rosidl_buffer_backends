@@ -142,8 +142,12 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
     }
   }
 
-  auto * cuda_impl = const_cast<CudaBufferImpl<uint8_t> *>(
-    static_cast<const CudaBufferImpl<uint8_t> *>(impl));
+  auto * cuda_impl = dynamic_cast<CudaBufferImpl<uint8_t> *>(                                                                                                                           
+  const_cast<rosidl::BufferImplBase<uint8_t> *>(                                                                                                                                      
+    static_cast<const rosidl::BufferImplBase<uint8_t> *>(impl)));                                                                                                                     
+  if (!cuda_impl) {                                                                                                                                                                     
+    return nullptr;                                                                                                                                                                     
+  }
 
   auto pool = CudaBufferImpl<uint8_t>::get_or_create_global_pool();
   if (!pool || !pool->is_ipc_capable()) {

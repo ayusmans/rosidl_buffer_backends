@@ -39,7 +39,14 @@ inline cudaStream_t get_internal_stream()
 {
   static cudaStream_t s = [] {
       cudaStream_t stream = nullptr;
-      cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+      cudaError_t err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+      if (err != cudaSuccess) {
+        RCUTILS_LOG_WARN_NAMED("cuda_buffer_backend",
+          "Failed to create internal CUDA stream (%s); "
+          "clone/resize/to_cpu will use the default (synchronizing) stream",
+          cudaGetErrorName(err));
+        (void)cudaGetLastError();
+      }
       return stream;
     }();
   return s;

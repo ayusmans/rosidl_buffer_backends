@@ -318,7 +318,7 @@ inline at::Tensor wrap_impl(
 inline at::Tensor from_buffer(rosidl::Buffer<uint8_t> & buffer)
 {
   if (buffer.empty()) {return {};}
-  const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
+  const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
   at::ScalarType dtype = string_to_scalar_type(impl->dtype());
   return detail::wrap_impl<true>(impl, impl->shape(), impl->strides(), dtype);
 }
@@ -327,7 +327,7 @@ inline at::Tensor from_buffer(rosidl::Buffer<uint8_t> & buffer)
 inline at::Tensor from_buffer(const rosidl::Buffer<uint8_t> & buffer)
 {
   if (buffer.empty()) {return {};}
-  const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
+  const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
   at::ScalarType dtype = string_to_scalar_type(impl->dtype());
   return detail::wrap_impl<false>(impl, impl->shape(), impl->strides(), dtype);
 }
