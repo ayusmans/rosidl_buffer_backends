@@ -78,7 +78,7 @@ public:
 
   std::unique_ptr<rosidl::BufferImplBase<T>> to_cpu() const override
   {
-    if (device_buffer_.empty()) {return nullptr;}
+    if (device_buffer_.empty()) {return std::make_unique<rosidl::CpuBufferImpl<T>>();}
     std::vector<uint8_t> cpu_vec = device_buffer_.to_vector();
     auto cpu_impl = std::make_unique<rosidl::CpuBufferImpl<T>>();
     cpu_impl->get_storage().resize(cpu_vec.size() / sizeof(T));

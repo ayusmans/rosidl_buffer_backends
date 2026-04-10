@@ -62,6 +62,34 @@ inline c10::DeviceType default_device()
   return c10::kCPU;
 }
 
+template<typename T>
+const TorchBufferImpl<T> * get_torch_impl(const rosidl::Buffer<T> & buffer)
+{
+  if (buffer.get_backend_type() != "torch") {
+    throw std::runtime_error(
+      "torch_buffer: operation called on non-torch buffer (backend: " +
+      buffer.get_backend_type() + ")");
+  }
+  const auto * impl = buffer.get_impl();
+  if (!impl) {
+    throw std::runtime_error(
+      "torch_buffer: operation called on buffer with null implementation");
+  }
+  const auto * torch_impl = dynamic_cast<const TorchBufferImpl<T> *>(impl);
+  if (!torch_impl) {
+    throw std::runtime_error(
+      "torch_buffer: failed to cast buffer impl to TorchBufferImpl");
+  }
+  return torch_impl;
+}
+
+template<typename T>
+TorchBufferImpl<T> * get_torch_impl(rosidl::Buffer<T> & buffer)
+{
+  return const_cast<TorchBufferImpl<T> *>(
+    get_torch_impl<T>(static_cast<const rosidl::Buffer<T> &>(buffer)));
+}
+
 }  // namespace detail
 
 /// \brief RAII guard that sets a non-default CUDA stream for the current scope.
@@ -98,6 +126,10 @@ MsgT allocate_msg(
 
   int64_t numel = 1;
   for (auto s : shape) {
+    if (s < 0) {
+      throw std::runtime_error(
+        "allocate_msg: negative shape dimension (" + std::to_string(s) + ")");
+    }
     numel *= s;
   }
   size_t byte_count = static_cast<size_t>(numel) * scalar_type_size(dtype);
@@ -145,8 +177,7 @@ inline void to_buffer(rosidl::Buffer<uint8_t> & buffer, const at::Tensor & tenso
   at::Tensor contig = tensor.contiguous();
   size_t byte_count = contig.numel() * contig.element_size();
 
-  auto * torch_impl = const_cast<TorchBufferImpl<uint8_t> *>(
-    static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl()));
+  auto * torch_impl = detail::get_torch_impl<uint8_t>(buffer);
 
   if (byte_count > torch_impl->byte_size()) {
     throw std::runtime_error(
@@ -309,7 +340,7 @@ inline at::Tensor from_buffer(
   at::ScalarType dtype = at::kByte)
 {
   if (buffer.empty()) {return {};}
-  const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
+  const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
   return detail::wrap_impl<true>(impl, shape, strides, dtype);
 }
 
@@ -321,7 +352,7 @@ inline at::Tensor from_buffer(
   at::ScalarType dtype = at::kByte)
 {
   if (buffer.empty()) {return {};}
-  const auto * impl = static_cast<const TorchBufferImpl<uint8_t> *>(buffer.get_impl());
+  const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
   return detail::wrap_impl<false>(impl, shape, strides, dtype);
 }
 

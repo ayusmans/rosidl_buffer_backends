@@ -58,8 +58,11 @@ public:
     const rmw_topic_endpoint_info_t & endpoint_info) const override
   {
     (void)endpoint_info;
-    const auto * torch_impl =
-      static_cast<const torch_buffer_backend::TorchBufferImpl<uint8_t> *>(impl);
+    const auto * torch_impl = dynamic_cast<const torch_buffer_backend::TorchBufferImpl<uint8_t> *>(
+      static_cast<const rosidl::BufferImplBase<uint8_t> *>(impl));
+    if (!torch_impl) {
+      return nullptr;
+    }
 
     auto descriptor = std::make_shared<torch_buffer_backend_msgs::msg::TorchBufferDescriptor>();
 
