@@ -48,6 +48,12 @@ public:
 
     count_publisher_ = this->create_publisher<std_msgs::msg::UInt32>("subscriber_count", 10);
     validation_publisher_ = this->create_publisher<std_msgs::msg::Bool>("validation_result", 10);
+    backend_validation_publisher_ =
+      this->create_publisher<std_msgs::msg::Bool>("backend_validation", 10);
+    content_validation_publisher_ =
+      this->create_publisher<std_msgs::msg::Bool>("content_validation", 10);
+    metadata_validation_publisher_ =
+      this->create_publisher<std_msgs::msg::Bool>("metadata_validation", 10);
     cpu_image_publisher_ = this->create_publisher<sensor_msgs::msg::Image>("test_cuda_image_cpu",
       10);
     latency_publisher_ = this->create_publisher<std_msgs::msg::Float64>("latency_ms", 10);
@@ -70,19 +76,21 @@ private:
     double latency_ms = (this->now() - msg->header.stamp).seconds() * 1000.0;
     received_count_++;
 
-    bool msg_valid = true;
+    bool metadata_valid = true;
+    bool backend_valid = true;
+    bool content_valid = true;
     size_t expected_size = msg->width * msg->height * 3;
 
     if (msg->encoding != "rgb8") {
       RCLCPP_ERROR(this->get_logger(), "Wrong encoding: %s",
                    msg->encoding.c_str());
-      msg_valid = false;
+      metadata_valid = false;
     }
 
     if (msg->data.size() != expected_size) {
       RCLCPP_ERROR(this->get_logger(), "Wrong data size: %zu (expected %zu)",
                    msg->data.size(), expected_size);
-      msg_valid = false;
+      metadata_valid = false;
     }
 
     const std::string backend_type = msg->data.get_backend_type();
@@ -90,7 +98,7 @@ private:
       RCLCPP_ERROR(this->get_logger(),
                    "Wrong backend type: %s (expected: %s)",
                    backend_type.c_str(), expected_backend_.c_str());
-      msg_valid = false;
+      backend_valid = false;
     }
 
     std::vector<uint8_t> cpu_data;
@@ -103,29 +111,29 @@ private:
         cudaMemcpyAsync(
           cpu_data.data(), read_handle.get_ptr(),
           msg->data.size(), cudaMemcpyDeviceToHost, stream_);
-        // ReadHandle orders GPU work via events but does not sync to CPU.
-        // Explicit sync is needed here because we access cpu_data on the host.
         cudaStreamSynchronize(stream_);
       } else {
         cpu_data = msg->data;
       }
     } catch (const std::exception & e) {
       RCLCPP_ERROR(this->get_logger(), "Exception during data read: %s", e.what());
-      msg_valid = false;
+      content_valid = false;
     }
 
-    if (!cpu_data.empty() && msg_valid) {
+    if (!cpu_data.empty() && metadata_valid && backend_valid) {
       uint8_t expected_val = cpu_data[0];
       for (size_t i = 1; i < cpu_data.size(); ++i) {
         if (cpu_data[i] != expected_val) {
           RCLCPP_ERROR(this->get_logger(),
             "Content corruption at byte %zu: expected 0x%02x, got 0x%02x",
             i, expected_val, cpu_data[i]);
-          msg_valid = false;
+          content_valid = false;
           break;
         }
       }
     }
+
+    bool msg_valid = metadata_valid && backend_valid && content_valid;
 
     if (!cpu_data.empty()) {
       sensor_msgs::msg::Image cpu_msg;
@@ -154,6 +162,18 @@ private:
     validation_msg.data = validation_passed_;
     validation_publisher_->publish(validation_msg);
 
+    std_msgs::msg::Bool backend_msg;
+    backend_msg.data = backend_valid;
+    backend_validation_publisher_->publish(backend_msg);
+
+    std_msgs::msg::Bool content_msg;
+    content_msg.data = content_valid;
+    content_validation_publisher_->publish(content_msg);
+
+    std_msgs::msg::Bool metadata_msg;
+    metadata_msg.data = metadata_valid;
+    metadata_validation_publisher_->publish(metadata_msg);
+
     if (!msg_valid) {
       RCLCPP_ERROR(this->get_logger(),
                    "Received INVALID image #%u", received_count_);
@@ -168,6 +188,9 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr subscription_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr count_publisher_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr validation_publisher_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr backend_validation_publisher_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr content_validation_publisher_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr metadata_validation_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr cpu_image_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr latency_publisher_;
   cudaStream_t stream_{nullptr};

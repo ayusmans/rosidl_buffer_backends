@@ -151,16 +151,18 @@ HostEndpointManager::HostEndpointManager(size_t domain_id)
     local_device_id_ = device;
   }
 
-  const char * test_device_env = std::getenv("CUDA_BUFFER_TEST_DEVICE_ID");
-  if (test_device_env != nullptr) {
-    local_device_id_ = std::atoi(test_device_env);
+  // Allow override for testing cross-device IPC fallback without multiple GPUs.
+  const char * device_override = std::getenv("CUDA_BUFFER_DEVICE_ID_OVERRIDE");
+  if (device_override != nullptr) {
+    local_device_id_ = std::atoi(device_override);
   }
 
   local_uid_ = static_cast<uint32_t>(getuid());
 
-  const char * test_uid_env = std::getenv("CUDA_BUFFER_TEST_UID");
-  if (test_uid_env != nullptr) {
-    local_uid_ = static_cast<uint32_t>(std::atoi(test_uid_env));
+  // Allow override for testing cross-user IPC fallback without multiple users.
+  const char * uid_override = std::getenv("CUDA_BUFFER_UID_OVERRIDE");
+  if (uid_override != nullptr) {
+    local_uid_ = static_cast<uint32_t>(std::atoi(uid_override));
   }
 
   char hostname_buf[256];

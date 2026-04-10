@@ -5,8 +5,9 @@
   <version>0.1.0</version>
   <description>CUDA buffer descriptor messages for ROS2 Buffer serialization</description>
 
-  <maintainer email="ros2@openrobotics.org">ROS 2 Team</maintainer>
+  <maintainer email="yuankunz@nvidia.com">Yuankun Zhu</maintainer>
   <license>Apache-2.0</license>
+  <author email="yuankunz@nvidia.com">Yuankun Zhu</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>rosidl_default_generators</buildtool_depend>

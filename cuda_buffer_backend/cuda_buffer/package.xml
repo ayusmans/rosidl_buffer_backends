@@ -7,10 +7,13 @@
   for the ROS 2 Buffer backend system. Contains both headers and compiled sources
   for IPC manager and host endpoint manager.</description>
 
-  <maintainer email="ros2@openrobotics.org">ROS 2 Team</maintainer>
+  <maintainer email="yuankunz@nvidia.com">Yuankun Zhu</maintainer>
   <license>Apache-2.0</license>
+  <author email="yuankunz@nvidia.com">Yuankun Zhu</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>nvidia-cuda</depend>
 
   <depend>cuda_buffer_backend_msgs</depend>
   <depend>rcutils</depend>

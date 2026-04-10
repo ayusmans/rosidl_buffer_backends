@@ -15,20 +15,20 @@
 #ifndef TORCH_BUFFER__TORCH_BUFFER_API_HPP_
 #define TORCH_BUFFER__TORCH_BUFFER_API_HPP_
 
+#include <c10/core/StreamGuard.h>
+#include <rcutils/logging_macros.h>
 #include <torch/torch.h>
+
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
-
-#include <rcutils/logging_macros.h>
 
 #include "rosidl_buffer/buffer.hpp"
 #include "torch_buffer/torch_buffer_impl.hpp"
 #include "torch_buffer/torch_buffer_utils.hpp"
-
-#include <c10/core/StreamGuard.h>
 
 #if __has_include("cuda_buffer/cuda_buffer_api.hpp")
 #include <c10/cuda/CUDAStream.h>
@@ -151,7 +151,7 @@ MsgT allocate_msg(
   if (dev == c10::kCUDA) {
     auto cuda_impl = std::make_unique<cuda_buffer_backend::CudaBufferImpl<uint8_t>>(byte_count);
     device_buffer = rosidl::Buffer<uint8_t>(std::move(cuda_impl));
-  } else
+  } else  // NOLINT(readability/braces)
 #endif
   if (dev == c10::kCPU) {
     device_buffer.resize(byte_count);
@@ -200,7 +200,7 @@ inline void to_buffer(rosidl::Buffer<uint8_t> & buffer, const at::Tensor & tenso
       cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
     cuda_buffer_backend::to_buffer(
       contig.data_ptr(), byte_count, wh, stream, kind);
-  } else
+  } else  // NOLINT(readability/braces)
 #endif
   if (backend == "cpu") {
     void * dst = torch_impl->get_device_buffer().data();
@@ -306,8 +306,9 @@ inline at::Tensor wrap_impl(
   const std::string & backend = impl->get_device_buffer().get_backend_type();
 #ifdef TORCH_BUFFER_DEVICE_CUDA
   if (backend == "cuda") {
-    if constexpr (Writable) {return cuda_wrap_writable(impl, shape, strides, dtype);}
-    else {return cuda_wrap_readable(impl, shape, strides, dtype);}
+    if constexpr (Writable) {return cuda_wrap_writable(impl, shape, strides, dtype);} else {
+      return cuda_wrap_readable(impl, shape, strides, dtype);
+    }
   }
 #endif
   if (backend == "cpu") {

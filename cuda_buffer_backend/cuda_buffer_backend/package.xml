@@ -6,8 +6,9 @@
   <description>CUDA buffer backend plugin for ROS 2 Buffer backend system.
   Enables zero-copy GPU memory sharing between publishers and subscribers.</description>
 
-  <maintainer email="ros2@openrobotics.org">ROS 2 Team</maintainer>
+  <maintainer email="yuankunz@nvidia.com">Yuankun Zhu</maintainer>
   <license>Apache-2.0</license>
+  <author email="yuankunz@nvidia.com">Yuankun Zhu</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

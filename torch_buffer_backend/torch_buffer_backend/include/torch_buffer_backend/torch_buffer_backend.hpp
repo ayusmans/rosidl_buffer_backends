@@ -113,8 +113,10 @@ public:
   {
     (void)endpoint_info;
     (void)existing_endpoints;
-    (void)endpoint_supported_backends;
-    return {true, {}};
+    return {
+      endpoint_supported_backends.find("torch") != endpoint_supported_backends.end(),
+      {}
+    };
   }
 };
 

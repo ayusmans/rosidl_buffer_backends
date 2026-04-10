@@ -188,6 +188,21 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
   cuda_impl->get_cuda_buffer().finalize_write_handle();
 
   cudaEvent_t write_event = cuda_impl->get_cuda_buffer().get_write_event();
+
+  rmw_gid_t gid;
+  gid.implementation_identifier = "";
+  std::memcpy(gid.data, endpoint_info.endpoint_gid, RMW_GID_STORAGE_SIZE);
+  auto locality = get_endpoint_manager()->query_endpoint_locality(gid);
+  if (locality.found &&
+    locality.locality == host_endpoint_manager::EndpointLocality::INTRA_PROCESS &&
+    write_event)
+  {
+    RCUTILS_LOG_WARN_ONCE_NAMED("cuda_buffer_backend",
+      "Same-process CUDA IPC requires cudaEventSynchronize on the publish path. "
+      "Enable intra-process communication to avoid this overhead.");
+    cudaEventSynchronize(write_event);
+  }
+
   if (write_event) {
     cudaIpcEventHandle_t event_handle;
     CUDA_CHECK(cudaIpcGetEventHandle(&event_handle, write_event));
@@ -260,8 +275,14 @@ std::unique_ptr<void, void (*)(void *)> CudaBufferBackend::from_descriptor_with_
             sizeof(cudaIpcEventHandle_t));
 
         cudaEvent_t imported_event = nullptr;
-        CUDA_CHECK(cudaIpcOpenEventHandle(&imported_event, event_handle));
-        imported_buffer.set_write_event(imported_event, true);
+        cudaError_t ev_err = cudaIpcOpenEventHandle(&imported_event, event_handle);
+        if (ev_err == cudaSuccess) {
+          imported_buffer.set_write_event(imported_event, true);
+        } else {
+          // Same-process: IPC event handles can't be opened in the originating
+          // process.
+          (void)cudaGetLastError();
+        }
       }
 
       auto result = std::make_unique<CudaBufferImpl<uint8_t>>(

@@ -45,6 +45,7 @@ def _make_fallback_subscriber(name, env_override, remapping_prefix):
             '-p', 'expected_backend:=cpu',
             '-r', f'subscriber_count:={remapping_prefix}_count',
             '-r', f'validation_result:={remapping_prefix}_validation',
+            '-r', f'backend_validation:={remapping_prefix}_backend_validation',
             '-r', f'latency_ms:={remapping_prefix}_latency',
         ],
         name=name,
@@ -80,15 +81,16 @@ def generate_test_description():
         remappings=[
             ('subscriber_count', 'ipc_count'),
             ('validation_result', 'ipc_validation'),
+            ('backend_validation', 'ipc_backend_validation'),
             ('latency_ms', 'ipc_latency'),
         ],
     )
 
     cross_device_sub = _make_fallback_subscriber(
-        'cross_device_sub', 'CUDA_BUFFER_TEST_DEVICE_ID=999', 'cross_device')
+        'cross_device_sub', 'CUDA_BUFFER_DEVICE_ID_OVERRIDE=999', 'cross_device')
 
     cross_user_sub = _make_fallback_subscriber(
-        'cross_user_sub', 'CUDA_BUFFER_TEST_UID=99999', 'cross_user')
+        'cross_user_sub', 'CUDA_BUFFER_UID_OVERRIDE=99999', 'cross_user')
 
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
@@ -121,6 +123,9 @@ class TestCudaImageCpuFallbackFastRTPS(unittest.TestCase):
         self.ipc_validation = True
         self.cross_device_validation = True
         self.cross_user_validation = True
+        self.ipc_backend_validation = True
+        self.cross_device_backend_validation = True
+        self.cross_user_backend_validation = True
         self.ipc_latencies = []
         self.cross_device_latencies = []
         self.cross_user_latencies = []
@@ -143,6 +148,14 @@ class TestCudaImageCpuFallbackFastRTPS(unittest.TestCase):
             Bool, 'cross_user_validation', self._cross_user_validation_cb, 10)
         self.node.create_subscription(
             Float64, 'cross_user_latency', self._cross_user_latency_cb, 10)
+        self.node.create_subscription(
+            Bool, 'ipc_backend_validation', self._ipc_backend_validation_cb, 10)
+        self.node.create_subscription(
+            Bool, 'cross_device_backend_validation',
+            self._cross_device_backend_validation_cb, 10)
+        self.node.create_subscription(
+            Bool, 'cross_user_backend_validation',
+            self._cross_user_backend_validation_cb, 10)
 
     def tearDown(self):
         self.node.destroy_node()
@@ -174,6 +187,18 @@ class TestCudaImageCpuFallbackFastRTPS(unittest.TestCase):
     def _cross_user_latency_cb(self, msg):
         self.cross_user_latencies.append(msg.data)
 
+    def _ipc_backend_validation_cb(self, msg):
+        if not msg.data:
+            self.ipc_backend_validation = False
+
+    def _cross_device_backend_validation_cb(self, msg):
+        if not msg.data:
+            self.cross_device_backend_validation = False
+
+    def _cross_user_backend_validation_cb(self, msg):
+        if not msg.data:
+            self.cross_user_backend_validation = False
+
     def _spin_until(self, timeout_sec=30.0):
         start = time.time()
         while ((self.ipc_count < 5 or
@@ -197,16 +222,28 @@ class TestCudaImageCpuFallbackFastRTPS(unittest.TestCase):
             f'Cross-user: {self.cross_user_count}')
 
         self.assertTrue(
+            self.ipc_backend_validation,
+            'Normal IPC backend check failed (expected backend="cuda")')
+
+        self.assertTrue(
             self.ipc_validation,
-            'Normal IPC validation failed (expected backend="cuda")')
+            'Normal IPC validation failed (content or metadata error)')
+
+        self.assertTrue(
+            self.cross_device_backend_validation,
+            'Cross-device backend check failed (expected backend="cpu")')
 
         self.assertTrue(
             self.cross_device_validation,
-            'Cross-device fallback validation failed (expected backend="cpu")')
+            'Cross-device validation failed (content or metadata error)')
+
+        self.assertTrue(
+            self.cross_user_backend_validation,
+            'Cross-user backend check failed (expected backend="cpu")')
 
         self.assertTrue(
             self.cross_user_validation,
-            'Cross-user fallback validation failed (expected backend="cpu")')
+            'Cross-user validation failed (content or metadata error)')
 
 
 @launch_testing.post_shutdown_test()
