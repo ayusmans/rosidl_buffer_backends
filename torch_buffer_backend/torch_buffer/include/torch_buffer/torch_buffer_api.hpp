@@ -130,6 +130,10 @@ MsgT allocate_msg(
       throw std::runtime_error(
         "allocate_msg: negative shape dimension (" + std::to_string(s) + ")");
     }
+    if (s < 0) {
+      throw std::runtime_error(
+        "allocate_msg: negative shape dimension (" + std::to_string(s) + ")");
+    }
     numel *= s;
   }
   size_t byte_count = static_cast<size_t>(numel) * scalar_type_size(dtype);
