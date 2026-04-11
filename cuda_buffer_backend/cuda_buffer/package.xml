@@ -13,13 +13,11 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>nvidia-cuda</depend>
-
   <depend>cuda_buffer_backend_msgs</depend>
+  <depend>nvidia-cuda</depend>
   <depend>rcutils</depend>
   <depend>rmw</depend>
   <depend>rosidl_buffer</depend>
-  <depend>nvidia-cuda</depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

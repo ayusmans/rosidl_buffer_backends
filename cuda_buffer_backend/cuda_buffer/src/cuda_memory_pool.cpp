@@ -57,7 +57,7 @@ CUresult CudaMemoryPool::create()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   if (initialized_) {
-    return CUDA_ERROR_ALREADY_MAPPED;
+    return CUDA_ERROR_ALREADY_ACQUIRED;
   }
 
   CUresult r = cuInit(0);
