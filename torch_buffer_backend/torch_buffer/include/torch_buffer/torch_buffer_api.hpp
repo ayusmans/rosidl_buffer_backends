@@ -331,13 +331,15 @@ inline at::Tensor cuda_wrap_readable(
     throw std::runtime_error("from_buffer (read): device buffer is not a CudaBufferImpl");
   }
   cudaStream_t stream = get_current_cuda_stream("from_buffer (read)");
-  auto rh = std::make_shared<cuda_buffer_backend::ReadHandle>(
-    cuda_impl->get_cuda_buffer().get_read_handle(stream));
-  void * ptr = const_cast<void *>(static_cast<const void *>(rh->get_ptr()));
+  auto rh = cuda_impl->get_cuda_buffer().get_read_handle(stream);
+  void * ptr = const_cast<void *>(static_cast<const void *>(rh.get_ptr()));
   auto opts = torch::TensorOptions().dtype(dtype).device(torch::kCUDA);
-  return strides.empty() ?
-         torch::from_blob(ptr, shape, [rh](void *) {}, opts) :
-         torch::from_blob(ptr, shape, strides, [rh](void *) {}, opts);
+  // D2D clone so each subscriber gets an independent mutable tensor; prevents
+  // subscribers from corrupting shared buffer memory via in-place ops.
+  at::Tensor view = strides.empty() ?
+    torch::from_blob(ptr, shape, opts) :
+    torch::from_blob(ptr, shape, strides, opts);
+  return view.clone();
 }
 
 #endif  // TORCH_BUFFER_DEVICE_CUDA

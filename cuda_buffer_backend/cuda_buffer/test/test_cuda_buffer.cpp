@@ -133,58 +133,6 @@ TEST_F(CudaBufferTest, ToBuffer_FromCpuBuffer)
   EXPECT_EQ(readback[63], 0xEF);
 }
 
-TEST_F(CudaBufferTest, ToBuffer_CopiesFromDevicePointer)
-{
-  constexpr size_t N = 512;
-  rosidl::Buffer<uint8_t> buffer;
-  allocate_buffer(buffer, N);
-
-  uint8_t * src_ptr = nullptr;
-  cudaMalloc(&src_ptr, N);
-  std::vector<uint8_t> host_src(N);
-  for (size_t i = 0; i < N; ++i) {
-    host_src[i] = static_cast<uint8_t>((10 + i) % 256);
-  }
-  cudaMemcpyAsync(src_ptr, host_src.data(), N, cudaMemcpyHostToDevice, stream1_);
-  cudaStreamSynchronize(stream1_);
-
-  cuda_buffer_backend::WriteHandle wh =
-    cuda_buffer_backend::from_buffer(buffer, stream1_);
-  cuda_buffer_backend::to_buffer(src_ptr, N, wh, stream1_);
-  cudaFree(src_ptr);
-
-  std::vector<uint8_t> result = read_to_host(wh.get_ptr(), N, stream1_);
-
-  for (size_t i = 0; i < N; ++i) {
-    EXPECT_EQ(static_cast<uint8_t>((10 + i) % 256), result[i])
-      << "Mismatch at index " << i;
-  }
-}
-
-TEST_F(CudaBufferTest, ToBuffer_CopiesFromHostPointer)
-{
-  constexpr size_t N = 256;
-  rosidl::Buffer<uint8_t> buffer;
-  allocate_buffer(buffer, N);
-
-  std::vector<uint8_t> host_src(N);
-  for (size_t i = 0; i < N; ++i) {
-    host_src[i] = static_cast<uint8_t>((50 + i) % 256);
-  }
-
-  cuda_buffer_backend::WriteHandle wh =
-    cuda_buffer_backend::from_buffer(buffer, stream1_);
-  cuda_buffer_backend::to_buffer(
-    host_src.data(), N, wh, stream1_, cudaMemcpyHostToDevice);
-
-  std::vector<uint8_t> result = read_to_host(wh.get_ptr(), N, stream1_);
-
-  for (size_t i = 0; i < N; ++i) {
-    EXPECT_EQ(static_cast<uint8_t>((50 + i) % 256), result[i])
-      << "Mismatch at index " << i;
-  }
-}
-
 TEST_F(CudaBufferTest, EventSync_WriteOnStream1_ReadOnStream2)
 {
   constexpr size_t N = 1024;

@@ -43,7 +43,8 @@ publisher->publish(msg);
 
 ### Publisher (from existing pointer)
 
-Use `to_buffer` to create a new CUDA-backed buffer from a raw pointer:
+Use `to_buffer` to allocate a new CUDA-backed buffer and copy data into it
+from a raw pointer.
 
 ```cpp
 sensor_msgs::msg::Image msg;
@@ -52,12 +53,17 @@ msg.width = 640;
 msg.encoding = "rgb8";
 msg.step = 640 * 3;
 
+// From a device pointer (D2D copy, default kind)
 msg.data = cuda_buffer_backend::to_buffer(gpu_ptr, data_size, stream);
+
+// Or from a host pointer (H2D copy)
+// msg.data = cuda_buffer_backend::to_buffer(
+//   host_ptr, data_size, stream, cudaMemcpyHostToDevice);
 
 publisher->publish(msg);
 ```
 
-### Subscriber (read from buffer)
+### Subscriber (read from buffer, zero-copy)
 
 ```cpp
 #include "cuda_buffer/cuda_buffer_api.hpp"
@@ -79,7 +85,9 @@ to CUDA:
 
 ```cpp
 void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
-  auto gpu_data = cuda_buffer_backend::to_buffer(msg->data, stream);
+  // The returned buffer must be treated as read-only; use `const` so
+  // `from_buffer` dispatches to the ReadHandle overload.
+  const auto gpu_data = cuda_buffer_backend::to_buffer(msg->data, stream);
   auto rh = cuda_buffer_backend::from_buffer(gpu_data, stream);
   my_kernel<<<...>>>(rh.get_ptr(), ...);
 }

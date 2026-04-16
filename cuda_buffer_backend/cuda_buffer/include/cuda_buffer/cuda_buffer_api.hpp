@@ -102,13 +102,11 @@ ReadHandle from_buffer(
 
 /// \brief Create a new CUDA-backed buffer from a raw pointer.
 /// Allocates GPU memory and copies data via the given stream.
-/// The returned buffer owns the CudaBufferImpl; the write event is
-/// recorded so subsequent from_buffer reads are properly ordered.
 inline rosidl::Buffer<uint8_t> to_buffer(
   const void * src,
   size_t byte_count,
   cudaStream_t stream,
-  cudaMemcpyKind kind = cudaMemcpyHostToDevice)
+  cudaMemcpyKind kind = cudaMemcpyDeviceToDevice)
 {
   auto impl = std::make_unique<CudaBufferImpl<uint8_t>>(byte_count);
   if (byte_count > 0 && src) {
