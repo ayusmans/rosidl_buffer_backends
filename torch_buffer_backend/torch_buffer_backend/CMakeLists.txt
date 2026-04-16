@@ -18,6 +18,7 @@ find_package(torch_buffer REQUIRED)
 find_package(torch_buffer_backend_msgs REQUIRED)
 find_package(rcutils REQUIRED)
 
+find_package(libtorch_vendor QUIET)
 find_package(CUDAToolkit QUIET)
 
 # Torch cmake setup (Caffe2 needs nvcc + host compiler)

@@ -4,25 +4,6 @@ PyTorch buffer backend plugin for the ROS 2 Buffer system. Wraps CUDA/CPU device
 
 For setup instructions, see the [ros2 meta repo](https://github.com/yuanknv/ros2).
 
-## Prerequisites
-
-LibTorch (the C++ distribution of PyTorch) must be installed before building.
-
-1. Download from <https://pytorch.org/get-started/locally/> (select LibTorch, C++, your CUDA version)
-2. Extract and set `CMAKE_PREFIX_PATH`:
-
-```bash
-unzip libtorch-cxx11-abi-shared-with-deps-*.zip -d /opt/
-export CMAKE_PREFIX_PATH="/opt/libtorch:$CMAKE_PREFIX_PATH"
-```
-
-For pixi-based workspaces, add to `pixi.toml` activation env:
-
-```toml
-[target.linux-64.activation.env]
-CMAKE_PREFIX_PATH="$PIXI_PROJECT_ROOT/path/to/libtorch:$CMAKE_PREFIX_PATH"
-```
-
 ## Build
 
 If you want GPU acceleration, build your device backend packages first
@@ -111,32 +92,24 @@ msg.step = 640 * 3;
 publisher->publish(msg);
 ```
 
-### Publisher (copy from existing tensor)
+### Publisher (from existing tensor)
 
-Use `to_buffer` when you have a tensor in PyTorch's own memory and need to copy it
-into the pre-allocated buffer. This triggers a device-to-device memcpy from the
-tensor's memory to the VMM pool buffer:
+Use `to_buffer` when you have a tensor and want to create a new buffer from it
+in one step:
 
 ```cpp
 torch_buffer_backend::StreamGuard guard = torch_buffer_backend::set_stream();
 
-sensor_msgs::msg::Image msg = torch_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(
-  {480, 640, 3}, torch::kByte);
+sensor_msgs::msg::Image msg;
+msg.height = 480;
+msg.width = 640;
+msg.encoding = "rgb8";
+msg.step = 640 * 3;
 
-at::Tensor result = model(input);  // runs on same stream as buffer ops
-torch_buffer_backend::to_buffer(msg.data, result);  // D2D memcpy into VMM pool buffer
+at::Tensor result = model(input);
+msg.data = torch_buffer_backend::to_buffer(result);  // allocate + D2D copy
 
 publisher->publish(msg);
-```
-
-For zero-copy (no D2D memcpy), use `from_buffer` to write directly into the pool
-buffer instead:
-
-```cpp
-{
-  at::Tensor output = torch_buffer_backend::from_buffer(msg.data);
-  model.forward_into(output);  // writes directly to VMM pool memory
-}
 ```
 
 ### Subscriber (read input tensor)

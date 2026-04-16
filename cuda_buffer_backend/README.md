@@ -2,12 +2,10 @@
 
 CUDA buffer backend plugin for the ROS 2 Buffer system. Enables zero-copy GPU memory sharing between publishers and subscribers on the same host using CUDA VMM (Virtual Memory Management).
 
-For setup instructions, see the [ros2 meta repo](https://github.com/yuanknv/ros2).
-
 ## Build
 
 ```bash
-pixi run build "cuda_buffer cuda_buffer_backend"
+pixi run build cuda_buffer_backend
 ```
 
 ## Packages
@@ -37,31 +35,26 @@ msg.step = 640 * 3;
 
 cuda_buffer_backend::WriteHandle wh =
   cuda_buffer_backend::from_buffer(msg.data, stream);
-cudaMemsetAsync(wh.get_ptr(), 0, data_size, stream);
-my_kernel<<<...>>>(wh.get_ptr(), ...);  // user operators on same stream
+my_kernel<<<...>>>(wh.get_ptr(), ...);
 
 publisher->publish(msg);
 // wh destructor records write_event on stream when it goes out of scope
 ```
 
-### Publisher (copy from existing pointer)
+### Publisher (from existing pointer)
 
-Use `to_buffer` when you have a pre-existing device pointer and need to
-copy it into the pre-allocated buffer. This triggers a device-to-device memcpy.
+Use `to_buffer` to create a new CUDA-backed buffer from a raw pointer:
 
 ```cpp
-const size_t data_size = 640 * 480 * 3;
+sensor_msgs::msg::Image msg;
+msg.height = 480;
+msg.width = 640;
+msg.encoding = "rgb8";
+msg.step = 640 * 3;
 
-sensor_msgs::msg::Image msg =
-  cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(data_size);
-
-cuda_buffer_backend::WriteHandle wh =
-  cuda_buffer_backend::from_buffer(msg.data, stream);
-// D2D memcpy from gpu_ptr into the pool buffer
-cuda_buffer_backend::to_buffer(gpu_ptr, data_size, wh, stream);
+msg.data = cuda_buffer_backend::to_buffer(gpu_ptr, data_size, stream);
 
 publisher->publish(msg);
-// wh destructor records write_event on stream when it goes out of scope
 ```
 
 ### Subscriber (read from buffer)
@@ -73,35 +66,47 @@ void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
   const rosidl::Buffer<uint8_t> & data = msg->data;
   cuda_buffer_backend::ReadHandle rh =
     cuda_buffer_backend::from_buffer(data, stream);
-  // ReadHandle constructor waits on publisher's write_event automatically
+  // ReadHandle constructor waits on publisher's write_event
 
-  cudaMemcpyAsync(host_buf, rh.get_ptr(), msg->data.size(),
-    cudaMemcpyDeviceToHost, stream);
+  my_kernel<<<...>>>(rh.get_ptr(), ...);
 }  // ReadHandle destructor signals publisher that GPU work is complete
 ```
+
+### Subscriber (promote non-CUDA buffer)
+
+Use `to_buffer` to promote a buffer from any backend (e.g. CPU fallback)
+to CUDA:
+
+```cpp
+void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
+  auto gpu_data = cuda_buffer_backend::to_buffer(msg->data, stream);
+  auto rh = cuda_buffer_backend::from_buffer(gpu_data, stream);
+  my_kernel<<<...>>>(rh.get_ptr(), ...);
+}
+```
+
+If the buffer is already CUDA-backed, `to_buffer` performs a D2D copy.
+For CPU buffers, it copies H2D. In both cases the returned buffer is
+a fresh CUDA allocation owned by the caller.
 
 ### `from_buffer` handle rules
 
 `from_buffer` returns a **WriteHandle** when called with a non-const buffer, or a
 **ReadHandle** when called with a const buffer. The overload is selected at compile
-time based on const-ness of the reference you pass:
+time based on const-ness of the reference:
 
 ```cpp
-// Write path -- use on a freshly allocated message before publish:
+// Write path (publisher):
 cuda_buffer_backend::WriteHandle wh = cuda_buffer_backend::from_buffer(msg.data, stream);
 
-// Read path -- use const reference in the subscriber callback:
+// Read path (subscriber):
 const rosidl::Buffer<uint8_t> & data = msg->data;
 cuda_buffer_backend::ReadHandle rh = cuda_buffer_backend::from_buffer(data, stream);
 ```
 
-- A **WriteHandle** can only be acquired once per buffer. It is intended for the
-  publisher to fill a freshly allocated message. Attempting to acquire a second
-  WriteHandle (or acquiring one after the write has been finalized) throws
-  `CudaError`.
-- To read a received buffer, always pass a **const reference**. If your subscriber
-  callback takes a non-const `SharedPtr` or `UniquePtr`, cast to const before
-  calling `from_buffer`:
+- A **WriteHandle** can only be acquired once per buffer. Attempting to acquire
+  a second WriteHandle (or acquiring one after finalization) throws `CudaError`.
+- To read a received buffer, always pass a **const reference**.
 
 ## IPC Behavior
 

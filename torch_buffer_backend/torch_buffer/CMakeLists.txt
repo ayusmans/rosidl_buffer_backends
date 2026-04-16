@@ -23,6 +23,8 @@ else()
   message(STATUS "torch_buffer: CUDA backend disabled (cuda_buffer not found)")
 endif()
 
+find_package(libtorch_vendor QUIET)
+
 # Torch cmake setup (Caffe2 needs nvcc + host compiler)
 find_program(CUDA_NVCC_EXECUTABLE nvcc
   PATHS /usr/local/cuda/bin ENV CUDA_PATH

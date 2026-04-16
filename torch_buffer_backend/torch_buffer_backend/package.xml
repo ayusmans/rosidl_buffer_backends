@@ -14,6 +14,8 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <build_depend>libtorch_vendor</build_depend>
+
   <depend>pluginlib</depend>
   <depend>rcutils</depend>
   <depend>rosidl_buffer_backend</depend>

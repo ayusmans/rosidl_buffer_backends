@@ -1,0 +1,7 @@
+# Copyright 2026 NVIDIA Corporation
+# Licensed under the Apache License, Version 2.0
+
+if(NOT Torch_DIR)
+  set(Torch_DIR "${@PROJECT_NAME@_DIR}/../../../opt/@PROJECT_NAME@/share/cmake/Torch")
+  message(STATUS "@PROJECT_NAME@: setting Torch_DIR to '${Torch_DIR}'")
+endif()

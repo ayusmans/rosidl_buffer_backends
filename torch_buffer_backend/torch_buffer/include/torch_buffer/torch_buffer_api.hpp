@@ -165,49 +165,99 @@ MsgT allocate_msg(
   return msg;
 }
 
-/// \brief Copy a PyTorch tensor into a pre-allocated torch buffer.
-/// \param buffer Destination buffer (must be allocated via allocate_msg).
-/// \param tensor Source tensor; will be made contiguous if needed.
-inline void to_buffer(rosidl::Buffer<uint8_t> & buffer, const at::Tensor & tensor)
+/// \brief Create a new torch-backed buffer from a tensor.
+/// Allocates the device buffer and copies tensor data in one step.
+inline rosidl::Buffer<uint8_t> to_buffer(
+  const at::Tensor & tensor,
+  std::optional<c10::DeviceType> device = std::nullopt)
 {
-  if (!tensor.defined() || tensor.numel() == 0) {
-    return;
-  }
+  if (!tensor.defined() || tensor.numel() == 0) {return {};}
 
   at::Tensor contig = tensor.contiguous();
   size_t byte_count = contig.numel() * contig.element_size();
+  c10::DeviceType dev = device.value_or(detail::default_device());
 
-  auto * torch_impl = detail::get_torch_impl<uint8_t>(buffer);
-
-  if (byte_count > torch_impl->byte_size()) {
-    throw std::runtime_error(
-      "to_buffer: tensor size (" + std::to_string(byte_count) +
-      " bytes) exceeds allocated buffer (" + std::to_string(torch_impl->byte_size()) + " bytes)");
-  }
-
-  const std::string & backend = torch_impl->get_device_buffer().get_backend_type();
+  rosidl::Buffer<uint8_t> device_buffer;
 
 #ifdef TORCH_BUFFER_DEVICE_CUDA
-  if (backend == "cuda") {
+  if (dev == c10::kCUDA) {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
-    auto wh = cuda_buffer_backend::from_buffer(
-      torch_impl->get_device_buffer(), stream);
     cudaMemcpyKind kind = contig.is_cuda() ?
       cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
-    cuda_buffer_backend::to_buffer(
-      contig.data_ptr(), byte_count, wh, stream, kind);
+    device_buffer = cuda_buffer_backend::to_buffer(
+      contig.data_ptr(), byte_count, stream, kind);
   } else  // NOLINT(readability/braces)
 #endif
-  if (backend == "cpu") {
-    void * dst = torch_impl->get_device_buffer().data();
-    std::memcpy(dst, contig.data_ptr(), byte_count);
+  if (dev == c10::kCPU) {
+    at::Tensor cpu_contig = contig.to(torch::kCPU).contiguous();
+    device_buffer.resize(byte_count);
+    std::memcpy(device_buffer.data(), cpu_contig.data_ptr(), byte_count);
   } else {
-    throw std::runtime_error("to_buffer: unsupported backend '" + backend + "'");
+    throw std::runtime_error(
+      "to_buffer: unsupported device type " + std::to_string(static_cast<int>(dev)));
   }
 
-  torch_impl->set_metadata(
+  auto torch_impl = std::make_unique<TorchBufferImpl<uint8_t>>(
+    std::move(device_buffer),
     contig.sizes().vec(), contig.strides().vec(),
     scalar_type_to_string(contig.scalar_type()));
+  return rosidl::Buffer<uint8_t>(std::move(torch_impl));
+}
+
+/// \brief Create a new torch-backed buffer from any rosidl::Buffer.
+/// If the source is torch-backed, tensor metadata is preserved.
+/// Otherwise the data is treated as flat uint8.
+inline rosidl::Buffer<uint8_t> to_buffer(
+  const rosidl::Buffer<uint8_t> & src,
+  std::optional<c10::DeviceType> device = std::nullopt)
+{
+  if (src.empty()) {return {};}
+
+  c10::DeviceType dev = device.value_or(detail::default_device());
+
+  const auto * src_torch = dynamic_cast<const TorchBufferImpl<uint8_t> *>(src.get_impl());
+  std::vector<int64_t> shape;
+  std::vector<int64_t> strides;
+  std::string dtype_str;
+  size_t byte_count;
+
+  if (src_torch) {
+    shape = src_torch->shape();
+    strides = src_torch->strides();
+    dtype_str = src_torch->dtype();
+    byte_count = src_torch->byte_size();
+  } else {
+    byte_count = src.size();
+    shape = {static_cast<int64_t>(byte_count)};
+    strides = {1};
+    dtype_str = "uint8";
+  }
+
+  rosidl::Buffer<uint8_t> device_buffer;
+
+#ifdef TORCH_BUFFER_DEVICE_CUDA
+  if (dev == c10::kCUDA) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
+    if (src_torch) {
+      device_buffer = cuda_buffer_backend::to_buffer(
+        src_torch->get_device_buffer(), stream);
+    } else {
+      device_buffer = cuda_buffer_backend::to_buffer(src, stream);
+    }
+  } else  // NOLINT(readability/braces)
+#endif
+  if (dev == c10::kCPU) {
+    std::vector<uint8_t> cpu_data = src.to_vector();
+    device_buffer.resize(cpu_data.size());
+    std::memcpy(device_buffer.data(), cpu_data.data(), cpu_data.size());
+  } else {
+    throw std::runtime_error(
+      "to_buffer: unsupported device type " + std::to_string(static_cast<int>(dev)));
+  }
+
+  auto torch_impl = std::make_unique<TorchBufferImpl<uint8_t>>(
+    std::move(device_buffer), shape, strides, dtype_str);
+  return rosidl::Buffer<uint8_t>(std::move(torch_impl));
 }
 
 namespace detail
