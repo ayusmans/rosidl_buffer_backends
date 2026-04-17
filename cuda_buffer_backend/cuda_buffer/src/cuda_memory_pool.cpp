@@ -50,7 +50,6 @@ CudaMemoryPool::~CudaMemoryPool()
       cuMemRelease(block->handle);
     }
   }
-  cudaDeviceReset();
 }
 
 CUresult CudaMemoryPool::create()

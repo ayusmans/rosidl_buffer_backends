@@ -28,6 +28,8 @@ colcon build --symlink-install --packages-up-to torch_buffer_backend
 source install/setup.sh
 ```
 
+`libtorch_vendor` auto-detects the CUDA variant (`cu118`/`cu121`/`cu124`/`cu126`/`cu128`/`cu129`, else `cpu`) and picks the latest LibTorch release available for it; override with `--cmake-args -DLIBTORCH_CUDA_VERSION=cu124` or `-DLIBTORCH_VERSION=2.6.0` if needed.
+
 ## Test
 
 ```bash

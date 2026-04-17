@@ -16,32 +16,15 @@ find_package(rmw REQUIRED)
 find_package(rcutils REQUIRED)
 
 find_package(cuda_buffer QUIET)
-if(cuda_buffer_FOUND)
-  find_package(CUDAToolkit REQUIRED)
-  message(STATUS "torch_buffer: CUDA backend enabled (cuda_buffer found)")
-else()
-  message(STATUS "torch_buffer: CUDA backend disabled (cuda_buffer not found)")
-endif()
-
 find_package(libtorch_vendor QUIET)
-
-# Torch cmake setup (Caffe2 needs nvcc + host compiler)
-find_program(CUDA_NVCC_EXECUTABLE nvcc
-  PATHS /usr/local/cuda/bin ENV CUDA_PATH
-)
-if(CUDA_NVCC_EXECUTABLE AND NOT CMAKE_CUDA_COMPILER)
-  set(CMAKE_CUDA_COMPILER "${CUDA_NVCC_EXECUTABLE}")
-endif()
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86;89;90")
-endif()
-if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER AND DEFINED CMAKE_CXX_COMPILER)
-  set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}")
-endif()
-
 find_package(Torch REQUIRED)
 
-# Header-only library (no compiled sources)
+set(_torch_has_cuda FALSE)
+if(TARGET torch_cuda)
+  set(_torch_has_cuda TRUE)
+  find_package(CUDAToolkit QUIET)
+endif()
+
 add_library(${PROJECT_NAME} INTERFACE)
 
 target_include_directories(${PROJECT_NAME} INTERFACE
@@ -59,12 +42,17 @@ target_link_libraries(${PROJECT_NAME}
     ${torch_buffer_backend_msgs_TARGETS}
 )
 
+if(_torch_has_cuda AND CUDAToolkit_FOUND)
+  target_link_libraries(${PROJECT_NAME} INTERFACE CUDA::cudart)
+  # torch_buffer compiles no CUDA device code (no .cu, no nvcc), so CUDA's
+  # host_config.h GCC check is irrelevant for us but still #errors out when
+  # the host GCC major exceeds the toolkit's supported range. Suppress it.
+  target_compile_definitions(${PROJECT_NAME} INTERFACE
+    __NV_NO_HOST_COMPILER_CHECK=1)
+endif()
+
 if(cuda_buffer_FOUND)
-  target_link_libraries(${PROJECT_NAME}
-    INTERFACE
-      cuda_buffer::cuda_buffer
-      CUDA::cudart
-  )
+  target_link_libraries(${PROJECT_NAME} INTERFACE cuda_buffer::cuda_buffer)
 endif()
 
 install(
@@ -79,7 +67,10 @@ install(
 )
 
 ament_export_targets(${PROJECT_NAME})
-ament_export_dependencies(rosidl_buffer torch_buffer_backend_msgs rmw rcutils)
+ament_export_dependencies(libtorch_vendor rosidl_buffer torch_buffer_backend_msgs rmw rcutils)
+if(_torch_has_cuda AND CUDAToolkit_FOUND)
+  ament_export_dependencies(CUDAToolkit)
+endif()
 if(cuda_buffer_FOUND)
   ament_export_dependencies(cuda_buffer)
 endif()

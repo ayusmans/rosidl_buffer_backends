@@ -18,38 +18,13 @@ find_package(torch_buffer REQUIRED)
 find_package(torch_buffer_backend_msgs REQUIRED)
 find_package(rcutils REQUIRED)
 
-find_package(libtorch_vendor QUIET)
-find_package(CUDAToolkit QUIET)
-
-# Torch cmake setup (Caffe2 needs nvcc + host compiler)
-find_program(CUDA_NVCC_EXECUTABLE nvcc
-  PATHS /usr/local/cuda/bin ENV CUDA_PATH
-)
-if(CUDA_NVCC_EXECUTABLE AND NOT CMAKE_CUDA_COMPILER)
-  set(CMAKE_CUDA_COMPILER "${CUDA_NVCC_EXECUTABLE}")
-endif()
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES "70;75;80;86;89;90")
-endif()
-if(NOT DEFINED CMAKE_CUDA_HOST_COMPILER AND DEFINED CMAKE_CXX_COMPILER)
-  set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}")
-endif()
-
-set(LIBTORCH_ROOT "$ENV{PIXI_PROJECT_ROOT}/.pixi/envs/default/libtorch")
-if(EXISTS "${LIBTORCH_ROOT}/share/cmake/Torch/TorchConfig.cmake")
-  list(APPEND CMAKE_PREFIX_PATH "${LIBTORCH_ROOT}")
-else()
-  execute_process(
-    COMMAND python3 -c "import torch; print(torch.utils.cmake_prefix_path)"
-    OUTPUT_VARIABLE TORCH_CMAKE_PREFIX
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE TORCH_PYTHON_RESULT
-  )
-  if(TORCH_PYTHON_RESULT EQUAL 0 AND TORCH_CMAKE_PREFIX)
-    list(APPEND CMAKE_PREFIX_PATH "${TORCH_CMAKE_PREFIX}")
-  endif()
-endif()
 find_package(Torch REQUIRED)
+
+set(_torch_has_cuda FALSE)
+if(TARGET torch_cuda)
+  set(_torch_has_cuda TRUE)
+  find_package(CUDAToolkit QUIET)
+endif()
 
 add_library(${PROJECT_NAME} SHARED
   src/torch_buffer_backend_plugin.cpp
@@ -133,7 +108,7 @@ if(BUILD_TESTING)
       torch_buffer::torch_buffer
       ${sensor_msgs_TARGETS}
     )
-    if(CUDAToolkit_FOUND)
+    if(_torch_has_cuda AND CUDAToolkit_FOUND)
       target_link_libraries(test_torch_buffer_backend CUDA::cuda_driver rt)
     endif()
   endif()
@@ -154,7 +129,7 @@ if(BUILD_TESTING)
     ${std_msgs_TARGETS}
     rosidl_runtime_cpp::rosidl_runtime_cpp
   )
-  if(CUDAToolkit_FOUND)
+  if(_torch_has_cuda AND CUDAToolkit_FOUND)
     target_link_libraries(torch_image_publisher_component CUDA::cuda_driver)
   endif()
   rclcpp_components_register_node(torch_image_publisher_component
@@ -183,7 +158,7 @@ if(BUILD_TESTING)
     ${std_msgs_TARGETS}
     rosidl_runtime_cpp::rosidl_runtime_cpp
   )
-  if(CUDAToolkit_FOUND)
+  if(_torch_has_cuda AND CUDAToolkit_FOUND)
     target_link_libraries(torch_image_subscriber_component CUDA::cuda_driver)
   endif()
   rclcpp_components_register_node(torch_image_subscriber_component

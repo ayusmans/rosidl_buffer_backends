@@ -7,9 +7,10 @@ project(libtorch_vendor)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_vendor_package REQUIRED)
 
-set(LIBTORCH_VERSION "2.11.0" CACHE STRING "LibTorch version to download")
+set(LIBTORCH_VERSION "" CACHE STRING
+  "LibTorch version to download. Auto-selected per CUDA variant if empty.")
 set(LIBTORCH_CUDA_VERSION "" CACHE STRING
-  "CUDA variant override (e.g. cu118, cu124, cu126, cpu). Auto-detected if empty.")
+  "CUDA variant override (cu118, cu121, cu124, cu126, cu128, cu129, cpu). Auto-detected if empty.")
 
 option(FORCE_BUILD_VENDOR_PKG
   "Build vendor packages from source, even if system-installed packages are available"
@@ -18,12 +19,35 @@ option(FORCE_BUILD_VENDOR_PKG
 if(LIBTORCH_CUDA_VERSION STREQUAL "")
   find_package(CUDAToolkit QUIET)
   if(CUDAToolkit_FOUND)
-    # cu126 matches modern CUDA 12.x drivers (backward-compatible).
-    set(LIBTORCH_CUDA_VERSION "cu126")
-    message(STATUS "${PROJECT_NAME}: CUDA ${CUDAToolkit_VERSION} detected, using cu126")
+    if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.9")
+      set(LIBTORCH_CUDA_VERSION "cu129")
+    elseif(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
+      set(LIBTORCH_CUDA_VERSION "cu128")
+    elseif(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.6")
+      set(LIBTORCH_CUDA_VERSION "cu126")
+    elseif(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.4")
+      set(LIBTORCH_CUDA_VERSION "cu124")
+    elseif(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.1")
+      set(LIBTORCH_CUDA_VERSION "cu121")
+    elseif(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+      set(LIBTORCH_CUDA_VERSION "cu118")
+    else()
+      set(LIBTORCH_CUDA_VERSION "cpu")
+    endif()
   else()
     set(LIBTORCH_CUDA_VERSION "cpu")
-    message(STATUS "${PROJECT_NAME}: no CUDA toolkit found, using CPU build")
+  endif()
+endif()
+
+if(LIBTORCH_VERSION STREQUAL "")
+  if(LIBTORCH_CUDA_VERSION STREQUAL "cu118")
+    set(LIBTORCH_VERSION "2.7.1")
+  elseif(LIBTORCH_CUDA_VERSION STREQUAL "cu121")
+    set(LIBTORCH_VERSION "2.5.1")
+  elseif(LIBTORCH_CUDA_VERSION STREQUAL "cu124")
+    set(LIBTORCH_VERSION "2.6.0")
+  else()
+    set(LIBTORCH_VERSION "2.11.0")
   endif()
 endif()
 
@@ -41,7 +65,9 @@ if(NOT Torch_FOUND OR FORCE_BUILD_VENDOR_PKG)
   else()
     set(_archive_prefix "libtorch-cxx11-abi-shared-with-deps")
   endif()
-  set(_url "https://download.pytorch.org/libtorch/${LIBTORCH_CUDA_VERSION}/${_archive_prefix}-${LIBTORCH_VERSION}%2B${LIBTORCH_CUDA_VERSION}.zip")
+  string(CONCAT _url
+    "https://download.pytorch.org/libtorch/${LIBTORCH_CUDA_VERSION}/"
+    "${_archive_prefix}-${LIBTORCH_VERSION}%2B${LIBTORCH_CUDA_VERSION}.zip")
   set(_archive "${CMAKE_CURRENT_BINARY_DIR}/libtorch.zip")
   set(_extract_dir "${CMAKE_CURRENT_BINARY_DIR}/libtorch_extracted")
 
