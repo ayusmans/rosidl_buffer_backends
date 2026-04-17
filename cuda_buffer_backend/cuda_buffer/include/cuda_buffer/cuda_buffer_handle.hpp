@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "cuda_buffer/cuda_error.hpp"
+#include "rosidl_buffer/buffer.hpp"
 
 namespace cuda_buffer_backend
 {
@@ -64,7 +65,8 @@ public:
 
   ReadHandle(ReadHandle && other) noexcept
   : data_ptr_(other.data_ptr_), read_events_(other.read_events_),
-    events_mutex_(other.events_mutex_), stream_(other.stream_)
+    events_mutex_(other.events_mutex_), stream_(other.stream_),
+    promoted_buffer_(std::move(other.promoted_buffer_))
   {
     other.data_ptr_ = nullptr;
     other.read_events_ = nullptr;
@@ -80,6 +82,7 @@ public:
       read_events_ = other.read_events_;
       events_mutex_ = other.events_mutex_;
       stream_ = other.stream_;
+      promoted_buffer_ = std::move(other.promoted_buffer_);
       other.data_ptr_ = nullptr;
       other.read_events_ = nullptr;
       other.events_mutex_ = nullptr;
@@ -94,6 +97,19 @@ public:
   }
 
   const uint8_t * get_ptr() const {return data_ptr_;}
+
+  /// \brief If set, this handle owns a newly-allocated CUDA buffer that was created
+  /// to promote a non-CUDA source buffer (e.g. CPU-backed) in from_buffer.
+  /// The promoted buffer stays alive as long as the handle (or a shared copy) lives.
+  std::shared_ptr<rosidl::Buffer<uint8_t>> get_promoted_buffer() const
+  {
+    return promoted_buffer_;
+  }
+
+  void set_promoted_buffer(std::shared_ptr<rosidl::Buffer<uint8_t>> buffer)
+  {
+    promoted_buffer_ = std::move(buffer);
+  }
 
 private:
   void release() noexcept
@@ -129,6 +145,7 @@ private:
   std::vector<cudaEvent_t> * read_events_{nullptr};
   std::mutex * events_mutex_{nullptr};
   cudaStream_t stream_{nullptr};
+  std::shared_ptr<rosidl::Buffer<uint8_t>> promoted_buffer_{};
 };
 
 /// \brief RAII write handle; destructor records write event on stream.
@@ -141,7 +158,8 @@ public:
 
   WriteHandle(WriteHandle && other) noexcept
   : data_ptr_(other.data_ptr_), write_event_ptr_(other.write_event_ptr_),
-    stream_(other.stream_), state_(std::move(other.state_))
+    stream_(other.stream_), state_(std::move(other.state_)),
+    promoted_buffer_(std::move(other.promoted_buffer_))
   {
     other.data_ptr_ = nullptr;
     other.write_event_ptr_ = nullptr;
@@ -156,6 +174,7 @@ public:
       write_event_ptr_ = other.write_event_ptr_;
       stream_ = other.stream_;
       state_ = std::move(other.state_);
+      promoted_buffer_ = std::move(other.promoted_buffer_);
       other.data_ptr_ = nullptr;
       other.write_event_ptr_ = nullptr;
       other.stream_ = nullptr;
@@ -169,6 +188,19 @@ public:
   }
 
   uint8_t * get_ptr() {return data_ptr_;}
+
+  /// \brief If set, this handle owns a newly-allocated CUDA buffer that was created
+  /// to promote a non-CUDA source buffer (e.g. CPU-backed) in from_buffer.
+  /// The promoted buffer stays alive as long as the handle (or a shared copy) lives.
+  std::shared_ptr<rosidl::Buffer<uint8_t>> get_promoted_buffer() const
+  {
+    return promoted_buffer_;
+  }
+
+  void set_promoted_buffer(std::shared_ptr<rosidl::Buffer<uint8_t>> buffer)
+  {
+    promoted_buffer_ = std::move(buffer);
+  }
 
 private:
   void release() noexcept
@@ -200,6 +232,7 @@ private:
   cudaEvent_t * write_event_ptr_{nullptr};
   cudaStream_t stream_{nullptr};
   std::shared_ptr<HandleState> state_{nullptr};
+  std::shared_ptr<rosidl::Buffer<uint8_t>> promoted_buffer_{};
 };
 
 }  // namespace cuda_buffer_backend

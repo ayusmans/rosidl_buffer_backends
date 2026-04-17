@@ -7,9 +7,9 @@ project(libtorch_vendor)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_vendor_package REQUIRED)
 
-set(LIBTORCH_VERSION "2.6.0" CACHE STRING "LibTorch version to download")
+set(LIBTORCH_VERSION "2.11.0" CACHE STRING "LibTorch version to download")
 set(LIBTORCH_CUDA_VERSION "" CACHE STRING
-  "CUDA variant override (e.g. cu118, cu124, cpu). Auto-detected if empty.")
+  "CUDA variant override (e.g. cu118, cu124, cu126, cpu). Auto-detected if empty.")
 
 option(FORCE_BUILD_VENDOR_PKG
   "Build vendor packages from source, even if system-installed packages are available"
@@ -18,9 +18,9 @@ option(FORCE_BUILD_VENDOR_PKG
 if(LIBTORCH_CUDA_VERSION STREQUAL "")
   find_package(CUDAToolkit QUIET)
   if(CUDAToolkit_FOUND)
-    # cu118 is forward-compatible with newer CUDA drivers.
-    set(LIBTORCH_CUDA_VERSION "cu118")
-    message(STATUS "${PROJECT_NAME}: CUDA ${CUDAToolkit_VERSION} detected, using cu118 (forward-compatible)")
+    # cu126 matches modern CUDA 12.x drivers (backward-compatible).
+    set(LIBTORCH_CUDA_VERSION "cu126")
+    message(STATUS "${PROJECT_NAME}: CUDA ${CUDAToolkit_VERSION} detected, using cu126")
   else()
     set(LIBTORCH_CUDA_VERSION "cpu")
     message(STATUS "${PROJECT_NAME}: no CUDA toolkit found, using CPU build")
@@ -34,7 +34,14 @@ if(NOT Torch_FOUND OR FORCE_BUILD_VENDOR_PKG)
     message(STATUS "${PROJECT_NAME}: forcing vendor build (FORCE_BUILD_VENDOR_PKG)")
   endif()
 
-  set(_url "https://download.pytorch.org/libtorch/${LIBTORCH_CUDA_VERSION}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${LIBTORCH_CUDA_VERSION}.zip")
+  # Starting with LibTorch 2.8.0, PyTorch dropped the "-cxx11-abi-" infix from
+  # the Linux archive name (they no longer ship the pre-cxx11-abi variant).
+  if(LIBTORCH_VERSION VERSION_GREATER_EQUAL "2.8.0")
+    set(_archive_prefix "libtorch-shared-with-deps")
+  else()
+    set(_archive_prefix "libtorch-cxx11-abi-shared-with-deps")
+  endif()
+  set(_url "https://download.pytorch.org/libtorch/${LIBTORCH_CUDA_VERSION}/${_archive_prefix}-${LIBTORCH_VERSION}%2B${LIBTORCH_CUDA_VERSION}.zip")
   set(_archive "${CMAKE_CURRENT_BINARY_DIR}/libtorch.zip")
   set(_extract_dir "${CMAKE_CURRENT_BINARY_DIR}/libtorch_extracted")
 
@@ -59,6 +66,20 @@ if(NOT Torch_FOUND OR FORCE_BUILD_VENDOR_PKG)
   )
 
   ament_index_register_resource("vendor_packages" CONTENT "opt/${PROJECT_NAME}")
+
+  # Install environment hooks so downstream binaries can locate the vendored
+  # shared libraries at runtime (LD_LIBRARY_PATH / PATH).
+  if(APPLE)
+    set(_LIBDIR_VAR_NAME "DYLD_LIBRARY_PATH")
+  elseif(WIN32)
+    set(_LIBDIR_VAR_NAME "PATH")
+  else()
+    set(_LIBDIR_VAR_NAME "LD_LIBRARY_PATH")
+  endif()
+  ament_environment_hooks(
+    "${ament_cmake_vendor_package_DIR}/templates/vendor_package.sh.in"
+    "${ament_cmake_vendor_package_DIR}/templates/vendor_package.dsv.in"
+  )
 else()
   message(STATUS "${PROJECT_NAME}: system LibTorch ${Torch_VERSION} found, skipping download")
 endif()

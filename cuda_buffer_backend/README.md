@@ -5,7 +5,19 @@ CUDA buffer backend plugin for the ROS 2 Buffer system. Enables zero-copy GPU me
 ## Build
 
 ```bash
-pixi run build cuda_buffer_backend
+# 1. Install system dependencies (CUDA toolkit)
+rosdep install --from-paths src/rosidl_buffer_backends --ignore-src -y
+
+# 2. Build the CUDA backend
+colcon build --symlink-install --packages-up-to cuda_buffer_backend
+source install/setup.sh
+```
+
+## Test
+
+```bash
+colcon test --packages-select cuda_buffer cuda_buffer_backend
+colcon test-result --verbose
 ```
 
 ## Packages
@@ -41,24 +53,31 @@ publisher->publish(msg);
 // wh destructor records write_event on stream when it goes out of scope
 ```
 
-### Publisher (from existing pointer)
+### Publisher (copy from existing pointer)
 
-Use `to_buffer` to allocate a new CUDA-backed buffer and copy data into it
-from a raw pointer.
+Use `to_buffer` to copy bytes from an existing pointer (host or device) into
+a buffer that was already allocated (e.g. via `allocate_msg`). `to_buffer`
+is a plain memcpy-through-a-WriteHandle and does **not** allocate.
 
 ```cpp
-sensor_msgs::msg::Image msg;
+sensor_msgs::msg::Image msg =
+  cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(data_size);
 msg.height = 480;
 msg.width = 640;
 msg.encoding = "rgb8";
 msg.step = 640 * 3;
 
-// From a device pointer (D2D copy, default kind)
-msg.data = cuda_buffer_backend::to_buffer(gpu_ptr, data_size, stream);
+{
+  cuda_buffer_backend::WriteHandle wh =
+    cuda_buffer_backend::from_buffer(msg.data, stream);
 
-// Or from a host pointer (H2D copy)
-// msg.data = cuda_buffer_backend::to_buffer(
-//   host_ptr, data_size, stream, cudaMemcpyHostToDevice);
+  // From a device pointer (D2D copy, default kind)
+  cuda_buffer_backend::to_buffer(gpu_ptr, data_size, wh, stream);
+
+  // Or from a host pointer (H2D copy)
+  // cuda_buffer_backend::to_buffer(
+  //   host_ptr, data_size, wh, stream, cudaMemcpyHostToDevice);
+}  // wh destructor records the write event on `stream`
 
 publisher->publish(msg);
 ```
@@ -78,24 +97,24 @@ void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
 }  // ReadHandle destructor signals publisher that GPU work is complete
 ```
 
-### Subscriber (promote non-CUDA buffer)
+### Auto-promoting non-CUDA buffers
 
-Use `to_buffer` to promote a buffer from any backend (e.g. CPU fallback)
-to CUDA:
+`from_buffer` accept any `rosidl::Buffer<T>`, not just
+CUDA-backed ones. If the source is a non-CUDA buffer (e.g. the CPU fallback
+path), `from_buffer` allocates a new CUDA-backed `rosidl::Buffer<uint8_t>`
+and returns a handle for it.
 
 ```cpp
+#include "cuda_buffer/cuda_buffer_api.hpp"
+
 void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
-  // The returned buffer must be treated as read-only; use `const` so
-  // `from_buffer` dispatches to the ReadHandle overload.
-  const auto gpu_data = cuda_buffer_backend::to_buffer(msg->data, stream);
-  auto rh = cuda_buffer_backend::from_buffer(gpu_data, stream);
+  const rosidl::Buffer<uint8_t> & data = msg->data;
+  cuda_buffer_backend::ReadHandle rh =
+    cuda_buffer_backend::from_buffer(data, stream);
+
   my_kernel<<<...>>>(rh.get_ptr(), ...);
 }
 ```
-
-If the buffer is already CUDA-backed, `to_buffer` performs a D2D copy.
-For CPU buffers, it copies H2D. In both cases the returned buffer is
-a fresh CUDA allocation owned by the caller.
 
 ### `from_buffer` handle rules
 
@@ -115,6 +134,8 @@ cuda_buffer_backend::ReadHandle rh = cuda_buffer_backend::from_buffer(data, stre
 - A **WriteHandle** can only be acquired once per buffer. Attempting to acquire
   a second WriteHandle (or acquiring one after finalization) throws `CudaError`.
 - To read a received buffer, always pass a **const reference**.
+- If the source buffer is non-CUDA, the handle owns the promoted CUDA buffer;
+  call `handle.get_promoted_buffer()` to retrieve it.
 
 ## IPC Behavior
 

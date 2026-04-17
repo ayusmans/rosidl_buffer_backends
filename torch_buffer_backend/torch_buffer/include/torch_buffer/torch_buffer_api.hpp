@@ -23,6 +23,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -165,99 +166,53 @@ MsgT allocate_msg(
   return msg;
 }
 
-/// \brief Create a new torch-backed buffer from a tensor.
-/// Allocates the device buffer and copies tensor data in one step.
-inline rosidl::Buffer<uint8_t> to_buffer(
-  const at::Tensor & tensor,
-  std::optional<c10::DeviceType> device = std::nullopt)
+/// \brief Copy a PyTorch tensor into a pre-allocated torch buffer.
+/// The buffer must have been allocated via \c allocate_msg (or otherwise be
+/// torch-backed). After the copy, the buffer's tensor metadata (shape,
+/// strides, dtype) is updated to match the source tensor.
+/// \param buffer Destination buffer (must be torch-backed).
+/// \param tensor Source tensor; will be made contiguous if needed.
+inline void to_buffer(rosidl::Buffer<uint8_t> & buffer, const at::Tensor & tensor)
 {
-  if (!tensor.defined() || tensor.numel() == 0) {return {};}
+  if (!tensor.defined() || tensor.numel() == 0) {
+    return;
+  }
 
   at::Tensor contig = tensor.contiguous();
   size_t byte_count = contig.numel() * contig.element_size();
-  c10::DeviceType dev = device.value_or(detail::default_device());
 
-  rosidl::Buffer<uint8_t> device_buffer;
+  auto * torch_impl = detail::get_torch_impl<uint8_t>(buffer);
+
+  if (byte_count > torch_impl->byte_size()) {
+    throw std::runtime_error(
+      "to_buffer: tensor size (" + std::to_string(byte_count) +
+      " bytes) exceeds allocated buffer (" + std::to_string(torch_impl->byte_size()) + " bytes)");
+  }
+
+  const std::string & backend = torch_impl->get_device_buffer().get_backend_type();
 
 #ifdef TORCH_BUFFER_DEVICE_CUDA
-  if (dev == c10::kCUDA) {
+  if (backend == "cuda") {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
+    auto wh = cuda_buffer_backend::from_buffer(
+      torch_impl->get_device_buffer(), stream);
     cudaMemcpyKind kind = contig.is_cuda() ?
       cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
-    device_buffer = cuda_buffer_backend::to_buffer(
-      contig.data_ptr(), byte_count, stream, kind);
+    cuda_buffer_backend::to_buffer(
+      contig.data_ptr(), byte_count, wh, stream, kind);
   } else  // NOLINT(readability/braces)
 #endif
-  if (dev == c10::kCPU) {
+  if (backend == "cpu") {
     at::Tensor cpu_contig = contig.to(torch::kCPU).contiguous();
-    device_buffer.resize(byte_count);
-    std::memcpy(device_buffer.data(), cpu_contig.data_ptr(), byte_count);
+    void * dst = torch_impl->get_device_buffer().data();
+    std::memcpy(dst, cpu_contig.data_ptr(), byte_count);
   } else {
-    throw std::runtime_error(
-      "to_buffer: unsupported device type " + std::to_string(static_cast<int>(dev)));
+    throw std::runtime_error("to_buffer: unsupported backend '" + backend + "'");
   }
 
-  auto torch_impl = std::make_unique<TorchBufferImpl<uint8_t>>(
-    std::move(device_buffer),
+  torch_impl->set_metadata(
     contig.sizes().vec(), contig.strides().vec(),
     scalar_type_to_string(contig.scalar_type()));
-  return rosidl::Buffer<uint8_t>(std::move(torch_impl));
-}
-
-/// \brief Create a new torch-backed buffer from any rosidl::Buffer.
-/// If the source is torch-backed, tensor metadata is preserved.
-/// Otherwise the data is treated as flat uint8.
-inline rosidl::Buffer<uint8_t> to_buffer(
-  const rosidl::Buffer<uint8_t> & src,
-  std::optional<c10::DeviceType> device = std::nullopt)
-{
-  if (src.empty()) {return {};}
-
-  c10::DeviceType dev = device.value_or(detail::default_device());
-
-  const auto * src_torch = dynamic_cast<const TorchBufferImpl<uint8_t> *>(src.get_impl());
-  std::vector<int64_t> shape;
-  std::vector<int64_t> strides;
-  std::string dtype_str;
-  size_t byte_count;
-
-  if (src_torch) {
-    shape = src_torch->shape();
-    strides = src_torch->strides();
-    dtype_str = src_torch->dtype();
-    byte_count = src_torch->byte_size();
-  } else {
-    byte_count = src.size();
-    shape = {static_cast<int64_t>(byte_count)};
-    strides = {1};
-    dtype_str = "uint8";
-  }
-
-  rosidl::Buffer<uint8_t> device_buffer;
-
-#ifdef TORCH_BUFFER_DEVICE_CUDA
-  if (dev == c10::kCUDA) {
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
-    if (src_torch) {
-      device_buffer = cuda_buffer_backend::to_buffer(
-        src_torch->get_device_buffer(), stream);
-    } else {
-      device_buffer = cuda_buffer_backend::to_buffer(src, stream);
-    }
-  } else  // NOLINT(readability/braces)
-#endif
-  if (dev == c10::kCPU) {
-    std::vector<uint8_t> cpu_data = src.to_vector();
-    device_buffer.resize(cpu_data.size());
-    std::memcpy(device_buffer.data(), cpu_data.data(), cpu_data.size());
-  } else {
-    throw std::runtime_error(
-      "to_buffer: unsupported device type " + std::to_string(static_cast<int>(dev)));
-  }
-
-  auto torch_impl = std::make_unique<TorchBufferImpl<uint8_t>>(
-    std::move(device_buffer), shape, strides, dtype_str);
-  return rosidl::Buffer<uint8_t>(std::move(torch_impl));
 }
 
 namespace detail
@@ -322,7 +277,8 @@ inline at::Tensor cuda_wrap_readable(
   const TorchBufferImpl<uint8_t> * impl,
   const std::vector<int64_t> & shape,
   const std::vector<int64_t> & strides,
-  at::ScalarType dtype)
+  at::ScalarType dtype,
+  bool clone)
 {
   const auto * cuda_impl =
     dynamic_cast<const cuda_buffer_backend::CudaBufferImpl<uint8_t> *>(
@@ -331,15 +287,23 @@ inline at::Tensor cuda_wrap_readable(
     throw std::runtime_error("from_buffer (read): device buffer is not a CudaBufferImpl");
   }
   cudaStream_t stream = get_current_cuda_stream("from_buffer (read)");
-  auto rh = cuda_impl->get_cuda_buffer().get_read_handle(stream);
-  void * ptr = const_cast<void *>(static_cast<const void *>(rh.get_ptr()));
   auto opts = torch::TensorOptions().dtype(dtype).device(torch::kCUDA);
-  // D2D clone so each subscriber gets an independent mutable tensor; prevents
-  // subscribers from corrupting shared buffer memory via in-place ops.
-  at::Tensor view = strides.empty() ?
-    torch::from_blob(ptr, shape, opts) :
-    torch::from_blob(ptr, shape, strides, opts);
-  return view.clone();
+  if (clone) {
+    auto rh = cuda_impl->get_cuda_buffer().get_read_handle(stream);
+    void * ptr = const_cast<void *>(static_cast<const void *>(rh.get_ptr()));
+    at::Tensor view = strides.empty() ?
+      torch::from_blob(ptr, shape, opts) :
+      torch::from_blob(ptr, shape, strides, opts);
+    return view.clone();
+  }
+  // Zero-copy: keep the ReadHandle alive via the tensor's deleter so the
+  // write/read-event machinery stays valid until the tensor is destroyed.
+  auto rh = std::make_shared<cuda_buffer_backend::ReadHandle>(
+    cuda_impl->get_cuda_buffer().get_read_handle(stream));
+  void * ptr = const_cast<void *>(static_cast<const void *>(rh->get_ptr()));
+  return strides.empty() ?
+         torch::from_blob(ptr, shape, [rh](void *) {}, opts) :
+         torch::from_blob(ptr, shape, strides, [rh](void *) {}, opts);
 }
 
 #endif  // TORCH_BUFFER_DEVICE_CUDA
@@ -349,18 +313,23 @@ inline at::Tensor wrap_impl(
   const TorchBufferImpl<uint8_t> * impl,
   const std::vector<int64_t> & shape,
   const std::vector<int64_t> & strides,
-  at::ScalarType dtype)
+  at::ScalarType dtype,
+  bool clone)
 {
   const std::string & backend = impl->get_device_buffer().get_backend_type();
 #ifdef TORCH_BUFFER_DEVICE_CUDA
   if (backend == "cuda") {
     if constexpr (Writable) {return cuda_wrap_writable(impl, shape, strides, dtype);} else {
-      return cuda_wrap_readable(impl, shape, strides, dtype);
+      return cuda_wrap_readable(impl, shape, strides, dtype, clone);
     }
   }
 #endif
   if (backend == "cpu") {
-    return cpu_wrap(impl, shape, strides, dtype);
+    at::Tensor view = cpu_wrap(impl, shape, strides, dtype);
+    if constexpr (!Writable) {
+      if (clone) {return view.clone();}
+    }
+    return view;
   }
   throw std::runtime_error("from_buffer: unsupported backend '" + backend + "'");
 }
@@ -373,16 +342,24 @@ inline at::Tensor from_buffer(rosidl::Buffer<uint8_t> & buffer)
   if (buffer.empty()) {return {};}
   const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
   at::ScalarType dtype = string_to_scalar_type(impl->dtype());
-  return detail::wrap_impl<true>(impl, impl->shape(), impl->strides(), dtype);
+  return detail::wrap_impl<true>(impl, impl->shape(), impl->strides(), dtype, false);
 }
 
-/// \brief Get a read-only tensor view of a torch buffer (uses stored metadata).
-inline at::Tensor from_buffer(const rosidl::Buffer<uint8_t> & buffer)
+/// \brief Get a read-only tensor of a torch buffer (uses stored metadata).
+/// \tparam Clone If true (default), returns an independent copy (\c at::Tensor)
+/// that subscribers can safely mutate. If false, returns a \c const at::Tensor
+/// that directly views the buffer's memory (zero-copy); the returned tensor
+/// owns a \c ReadHandle via its deleter, so the source buffer stays alive
+/// until the tensor is destroyed. The \c const signals that the caller must
+/// not mutate the tensor in place.
+template<bool Clone = true>
+inline std::conditional_t<Clone, at::Tensor, const at::Tensor>
+from_buffer(const rosidl::Buffer<uint8_t> & buffer)
 {
   if (buffer.empty()) {return {};}
   const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
   at::ScalarType dtype = string_to_scalar_type(impl->dtype());
-  return detail::wrap_impl<false>(impl, impl->shape(), impl->strides(), dtype);
+  return detail::wrap_impl<false>(impl, impl->shape(), impl->strides(), dtype, Clone);
 }
 
 /// \brief Get a writable tensor view with explicit shape, strides, and dtype.
@@ -394,11 +371,14 @@ inline at::Tensor from_buffer(
 {
   if (buffer.empty()) {return {};}
   const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
-  return detail::wrap_impl<true>(impl, shape, strides, dtype);
+  return detail::wrap_impl<true>(impl, shape, strides, dtype, false);
 }
 
-/// \brief Get a read-only tensor view with explicit shape, strides, and dtype.
-inline at::Tensor from_buffer(
+/// \brief Get a read-only tensor with explicit shape, strides, and dtype.
+/// \tparam Clone See the single-argument overload; defaults to true.
+template<bool Clone = true>
+inline std::conditional_t<Clone, at::Tensor, const at::Tensor>
+from_buffer(
   const rosidl::Buffer<uint8_t> & buffer,
   const std::vector<int64_t> & shape,
   const std::vector<int64_t> & strides = {},
@@ -406,7 +386,7 @@ inline at::Tensor from_buffer(
 {
   if (buffer.empty()) {return {};}
   const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
-  return detail::wrap_impl<false>(impl, shape, strides, dtype);
+  return detail::wrap_impl<false>(impl, shape, strides, dtype, Clone);
 }
 
 }  // namespace torch_buffer_backend

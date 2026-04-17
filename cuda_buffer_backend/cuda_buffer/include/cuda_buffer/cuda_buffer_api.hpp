@@ -29,44 +29,6 @@
 namespace cuda_buffer_backend
 {
 
-namespace detail
-{
-
-template<typename T>
-CudaBufferImpl<T> * get_cuda_impl(rosidl::Buffer<T> & buffer)
-{
-  const auto * impl = buffer.get_impl();
-  if (!impl) {
-    throw CudaError("from_buffer called on buffer with null implementation");
-  }
-  auto * cuda_impl = const_cast<CudaBufferImpl<T> *>(
-    dynamic_cast<const CudaBufferImpl<T> *>(impl));
-  if (!cuda_impl) {
-    throw CudaError(
-            "from_buffer: buffer is not CUDA-backed (backend: " +
-            buffer.get_backend_type() + ")");
-  }
-  return cuda_impl;
-}
-
-template<typename T>
-const CudaBufferImpl<T> * get_cuda_impl(const rosidl::Buffer<T> & buffer)
-{
-  const auto * impl = buffer.get_impl();
-  if (!impl) {
-    throw CudaError("from_buffer called on buffer with null implementation");
-  }
-  const auto * cuda_impl = dynamic_cast<const CudaBufferImpl<T> *>(impl);
-  if (!cuda_impl) {
-    throw CudaError(
-            "from_buffer: buffer is not CUDA-backed (backend: " +
-            buffer.get_backend_type() + ")");
-  }
-  return cuda_impl;
-}
-
-}  // namespace detail
-
 /// \brief Allocate a ROS message with a CUDA-backed buffer of \p count elements.
 template<typename MsgT>
 MsgT allocate_msg(size_t count)
@@ -77,68 +39,107 @@ MsgT allocate_msg(size_t count)
   return msg;
 }
 
+namespace detail
+{
+
+/// \brief Allocate a fresh CUDA-backed rosidl::Buffer<uint8_t>.
+/// Pure allocation: no write handle is acquired, no copy is performed.
+inline std::shared_ptr<rosidl::Buffer<uint8_t>> allocate_cuda_buffer(size_t byte_count)
+{
+  auto cuda_impl = std::make_unique<CudaBufferImpl<uint8_t>>(byte_count);
+  return std::make_shared<rosidl::Buffer<uint8_t>>(std::move(cuda_impl));
+}
+
+inline CudaBufferImpl<uint8_t> * cuda_impl_of(rosidl::Buffer<uint8_t> & buffer)
+{
+  return const_cast<CudaBufferImpl<uint8_t> *>(
+    dynamic_cast<const CudaBufferImpl<uint8_t> *>(buffer.get_impl()));
+}
+
+}  // namespace detail
+
 /// \brief Acquire a write handle for a CUDA-backed buffer.
-/// \throws CudaError if the buffer is not CUDA-backed.
+/// \details If \p buffer is already CUDA-backed, returns a write handle
+/// directly. If the buffer is non-CUDA (e.g. CPU-backed), a fresh
+/// CUDA-backed \c rosidl::Buffer<uint8_t> is allocated (no H2D copy; the
+/// caller is about to overwrite it) and a write handle for the new buffer
+/// is returned.
 template<typename T>
 WriteHandle from_buffer(
   rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
-  auto * cuda_impl = detail::get_cuda_impl(buffer);
-  cuda_impl->set_stream(stream);
-  return cuda_impl->get_cuda_buffer().get_write_handle(stream);
+  auto * impl = buffer.get_impl();
+  if (!impl) {
+    throw CudaError("from_buffer called on buffer with null implementation");
+  }
+  if (buffer.size() == 0) {
+    throw CudaError("from_buffer called on empty buffer");
+  }
+  auto * cuda_impl = const_cast<CudaBufferImpl<T> *>(
+    dynamic_cast<const CudaBufferImpl<T> *>(impl));
+  if (cuda_impl) {
+    cuda_impl->set_stream(stream);
+    return cuda_impl->get_cuda_buffer().get_write_handle(stream);
+  }
+
+  size_t byte_count = buffer.size() * sizeof(T);
+  auto promoted = detail::allocate_cuda_buffer(byte_count);
+  auto * promoted_impl = detail::cuda_impl_of(*promoted);
+  promoted_impl->set_stream(stream);
+  auto wh = promoted_impl->get_cuda_buffer().get_write_handle(stream);
+  wh.set_promoted_buffer(std::move(promoted));
+  return wh;
 }
 
 /// \brief Acquire a read handle for a CUDA-backed buffer.
-/// \throws CudaError if the buffer is not CUDA-backed.
+/// \details If \p buffer is already CUDA-backed, returns a read handle directly.
+/// If the buffer is non-CUDA (e.g. CPU-backed), a new CUDA-backed
+/// rosidl::Buffer<uint8_t> is allocated, the source contents are copied host-to-device,
+/// and a read handle for the new buffer is returned.
 template<typename T>
 ReadHandle from_buffer(
   const rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
-  const auto * cuda_impl = detail::get_cuda_impl(buffer);
-  return cuda_impl->get_cuda_buffer().get_read_handle(stream);
+  const auto * impl = buffer.get_impl();
+  if (!impl) {
+    throw CudaError("from_buffer called on buffer with null implementation");
+  }
+  if (buffer.size() == 0) {
+    throw CudaError("from_buffer called on empty buffer");
+  }
+  const auto * cuda_impl = dynamic_cast<const CudaBufferImpl<T> *>(impl);
+  if (cuda_impl) {
+    return cuda_impl->get_cuda_buffer().get_read_handle(stream);
+  }
+
+  size_t byte_count = buffer.size() * sizeof(T);
+  auto promoted = detail::allocate_cuda_buffer(byte_count);
+  auto * promoted_impl = detail::cuda_impl_of(*promoted);
+  {
+    auto wh = promoted_impl->get_cuda_buffer().get_write_handle(stream);
+    CUDA_CHECK(cudaMemcpyAsync(
+      wh.get_ptr(), buffer.data(), byte_count, cudaMemcpyHostToDevice, stream));
+  }
+  auto rh = promoted_impl->get_cuda_buffer().get_read_handle(stream);
+  rh.set_promoted_buffer(std::move(promoted));
+  return rh;
 }
 
-/// \brief Create a new CUDA-backed buffer from a raw pointer.
-/// Allocates GPU memory and copies data via the given stream.
-inline rosidl::Buffer<uint8_t> to_buffer(
+/// \brief Copy \p byte_count bytes from \p src into the memory referenced by \p wh
+/// using \p stream and the given \p kind. Does not allocate.
+inline void to_buffer(
   const void * src,
   size_t byte_count,
+  WriteHandle & wh,
   cudaStream_t stream,
   cudaMemcpyKind kind = cudaMemcpyDeviceToDevice)
 {
-  auto impl = std::make_unique<CudaBufferImpl<uint8_t>>(byte_count);
-  if (byte_count > 0 && src) {
-    auto wh = impl->get_cuda_buffer().get_write_handle(stream);
-    CUDA_CHECK(cudaMemcpyAsync(wh.get_ptr(), src, byte_count, kind, stream));
+  if (byte_count == 0 || !src || !wh.get_ptr()) {
+    return;
   }
-  return rosidl::Buffer<uint8_t>(std::move(impl));
-}
-
-/// \brief Create a new CUDA-backed buffer from any rosidl::Buffer.
-/// If the source is already CUDA-backed, performs a device-to-device copy.
-/// Otherwise copies from host.
-template<typename T>
-rosidl::Buffer<T> to_buffer(
-  const rosidl::Buffer<T> & src,
-  cudaStream_t stream)
-{
-  size_t byte_count = src.size() * sizeof(T);
-  auto impl = std::make_unique<CudaBufferImpl<T>>(byte_count);
-  if (byte_count > 0) {
-    auto wh = impl->get_cuda_buffer().get_write_handle(stream);
-    if (src.get_backend_type() == "cuda") {
-      const auto * src_impl = detail::get_cuda_impl(src);
-      auto rh = src_impl->get_cuda_buffer().get_read_handle(stream);
-      CUDA_CHECK(cudaMemcpyAsync(
-        wh.get_ptr(), rh.get_ptr(), byte_count, cudaMemcpyDeviceToDevice, stream));
-    } else {
-      CUDA_CHECK(cudaMemcpyAsync(
-        wh.get_ptr(), src.data(), byte_count, cudaMemcpyHostToDevice, stream));
-    }
-  }
-  return rosidl::Buffer<T>(std::move(impl));
+  CUDA_CHECK(cudaMemcpyAsync(wh.get_ptr(), src, byte_count, kind, stream));
 }
 
 }  // namespace cuda_buffer_backend

@@ -76,14 +76,39 @@ TEST_F(CudaBufferTest, AllocateAndWriteHandle)
   EXPECT_EQ(1024u, buffer.size());
 }
 
-TEST_F(CudaBufferTest, FromBuffer_ThrowsOnCpuBuffer)
+TEST_F(CudaBufferTest, FromBuffer_PromotesCpuBufferForRead)
 {
   rosidl::Buffer<uint8_t> buffer(64);
+  for (size_t i = 0; i < 64; ++i) {
+    buffer[i] = static_cast<uint8_t>(0xA0 + (i % 16));
+  }
   const rosidl::Buffer<uint8_t> & cbuf = buffer;
 
-  EXPECT_THROW(
-    cuda_buffer_backend::from_buffer(cbuf, stream1_),
-    cuda_buffer_backend::CudaError);
+  cuda_buffer_backend::ReadHandle rh =
+    cuda_buffer_backend::from_buffer(cbuf, stream1_);
+  auto promoted = rh.get_promoted_buffer();
+  ASSERT_NE(nullptr, promoted);
+  EXPECT_EQ(promoted->get_backend_type(), "cuda");
+  EXPECT_EQ(promoted->size(), 64u);
+
+  std::vector<uint8_t> readback = read_to_host(rh.get_ptr(), 64, stream1_);
+  for (size_t i = 0; i < 64; ++i) {
+    EXPECT_EQ(readback[i], static_cast<uint8_t>(0xA0 + (i % 16)));
+  }
+}
+
+TEST_F(CudaBufferTest, FromBuffer_PromotesCpuBufferForWrite)
+{
+  rosidl::Buffer<uint8_t> buffer(64);
+  cuda_buffer_backend::WriteHandle wh =
+    cuda_buffer_backend::from_buffer(buffer, stream1_);
+  auto promoted = wh.get_promoted_buffer();
+  ASSERT_NE(nullptr, promoted);
+  EXPECT_EQ(promoted->get_backend_type(), "cuda");
+  EXPECT_EQ(promoted->size(), 64u);
+  EXPECT_NE(nullptr, wh.get_ptr());
+
+  write_pattern(wh.get_ptr(), 64, 123, stream1_);
 }
 
 TEST_F(CudaBufferTest, FromBuffer_ThrowsOnEmptyBuffer)
@@ -96,41 +121,24 @@ TEST_F(CudaBufferTest, FromBuffer_ThrowsOnEmptyBuffer)
     cuda_buffer_backend::CudaError);
 }
 
-TEST_F(CudaBufferTest, ToBuffer_FromRawPointer)
+TEST_F(CudaBufferTest, ToBuffer_CopiesThroughWriteHandle)
 {
+  rosidl::Buffer<uint8_t> buffer;
+  allocate_buffer(buffer, 64);
+
   std::vector<uint8_t> host_data(64, 0xCD);
-  auto cuda_buf = cuda_buffer_backend::to_buffer(
-    host_data.data(), 64, stream1_, cudaMemcpyHostToDevice);
+  {
+    cuda_buffer_backend::WriteHandle wh =
+      cuda_buffer_backend::from_buffer(buffer, stream1_);
+    cuda_buffer_backend::to_buffer(
+      host_data.data(), 64, wh, stream1_, cudaMemcpyHostToDevice);
+  }
 
-  EXPECT_EQ(cuda_buf.get_backend_type(), "cuda");
-  EXPECT_EQ(cuda_buf.size(), 64u);
-
-  const auto & cbuf = cuda_buf;
+  const auto & cbuf = buffer;
   auto rh = cuda_buffer_backend::from_buffer(cbuf, stream1_);
-  std::vector<uint8_t> readback(64);
-  cudaMemcpyAsync(readback.data(), rh.get_ptr(), 64, cudaMemcpyDeviceToHost, stream1_);
-  cudaStreamSynchronize(stream1_);
+  std::vector<uint8_t> readback = read_to_host(rh.get_ptr(), 64, stream1_);
   EXPECT_EQ(readback[0], 0xCD);
   EXPECT_EQ(readback[63], 0xCD);
-}
-
-TEST_F(CudaBufferTest, ToBuffer_FromCpuBuffer)
-{
-  rosidl::Buffer<uint8_t> cpu_buf(64);
-  std::memset(cpu_buf.data(), 0xEF, 64);
-
-  auto cuda_buf = cuda_buffer_backend::to_buffer(cpu_buf, stream1_);
-
-  EXPECT_EQ(cuda_buf.get_backend_type(), "cuda");
-  EXPECT_EQ(cuda_buf.size(), 64u);
-
-  const auto & cbuf2 = cuda_buf;
-  auto rh = cuda_buffer_backend::from_buffer(cbuf2, stream1_);
-  std::vector<uint8_t> readback(64);
-  cudaMemcpyAsync(readback.data(), rh.get_ptr(), 64, cudaMemcpyDeviceToHost, stream1_);
-  cudaStreamSynchronize(stream1_);
-  EXPECT_EQ(readback[0], 0xEF);
-  EXPECT_EQ(readback[63], 0xEF);
 }
 
 TEST_F(CudaBufferTest, EventSync_WriteOnStream1_ReadOnStream2)

@@ -6,20 +6,32 @@ For setup instructions, see the [ros2 meta repo](https://github.com/yuanknv/ros2
 
 ## Build
 
-If you want GPU acceleration, build your device backend packages first
-(e.g. `cuda_buffer_backend`). The torch packages auto-detect available
-device backends at compile time.
+The torch packages auto-detect available device backends at compile time.
+For GPU acceleration, build `cuda_buffer_backend` first and source the
+install so its CMake config is visible when `torch_buffer` is configured.
 
 ```bash
-# 1. (Optional) Build device backends for GPU support
-pixi run build cuda_buffer_backend
+# 1. Install system dependencies
+rosdep install --from-paths src/rosidl_buffer_backends --ignore-src -y
 
-# 2. Build torch packages
-pixi run build torch_buffer_backend
+# 2. (Optional) Build CUDA device backend for GPU support, then source
+colcon build --symlink-install --packages-up-to cuda_buffer_backend && \
+  source install/setup.sh
+
+# 3. Build torch packages
+colcon build --symlink-install --packages-up-to torch_buffer_backend
+source install/setup.sh
 ```
 
-If no device backend is installed, torch_buffer falls back to CPU
-automatically.
+If `cuda_buffer_backend` is not installed, `torch_buffer` falls back to
+CPU automatically.
+
+## Test
+
+```bash
+colcon test --packages-select torch_buffer torch_buffer_backend
+colcon test-result --verbose
+```
 
 > **Note:** Tests validate the CPU backend path only, since
 > `torch_buffer_backend` has no explicit dependency on any device backend
@@ -95,34 +107,38 @@ msg.step = 640 * 3;
 publisher->publish(msg);
 ```
 
-### Publisher: `to_buffer` (from existing tensor)
+### Publisher: `to_buffer` (copy from existing tensor)
 
-`to_buffer(tensor)` allocates a new `rosidl::Buffer` on the default device
-(CUDA if available, otherwise CPU) and copies the tensor's data into it.
-The copy kind depends on the source and destination devices (D2D, H2D, D2H,
-or H2H). Use this when you already have a tensor.
+`to_buffer(buffer, tensor)` copies a tensor's data into a pre-allocated
+torch-backed `rosidl::Buffer` and updates the buffer's tensor metadata
+(shape, strides, dtype) to match. It does **not** allocate: the caller is
+expected to first obtain a buffer from `allocate_msg`. The copy kind
+depends on the source and destination devices.
 
 ```cpp
 torch_buffer_backend::StreamGuard guard = torch_buffer_backend::set_stream();
 
-sensor_msgs::msg::Image msg;
+sensor_msgs::msg::Image msg = torch_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(
+  {480, 640, 3}, torch::kByte);
 msg.height = 480;
 msg.width = 640;
 msg.encoding = "rgb8";
 msg.step = 640 * 3;
 
 at::Tensor result = model(input);
-msg.data = torch_buffer_backend::to_buffer(result);  // allocate + D2D copy
+torch_buffer_backend::to_buffer(msg.data, result);  // copy into msg.data
 
 publisher->publish(msg);
 ```
 
 ### Subscriber: `from_buffer` (read input tensor)
 
-On the subscriber side (const buffer) with a CUDA device backend,
-`from_buffer` performs a D2D copy into an independent tensor. Torch tensors
-are always mutable, so a copy is needed to prevent subscribers from
-corrupting shared GPU memory.
+On the subscriber side (const buffer) `from_buffer` defaults to returning an
+independent copy of the buffer contents so subscribers can safely mutate
+the tensor without corrupting shared memory. For CUDA this is a D2D clone;
+for CPU it is a host copy. If the subscriber is certain it will not mutate
+the tensor in place, call `from_buffer<false>(data)`, which returns a
+`const at::Tensor` zero-copy view.
 
 ```cpp
 #include "torch_buffer/torch_buffer_api.hpp"
