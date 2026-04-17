@@ -21,18 +21,19 @@ subscribers.
 
 ## Prerequisites
 
-- CUDA Toolkit (>= 11.8)
-- LibTorch is provided automatically by `libtorch_vendor` at build time
+- A ROS 2 Rolling development environment. See the upstream
+  [Building ROS 2 on Ubuntu](https://docs.ros.org/en/rolling/Installation/Alternatives/Ubuntu-Development-Setup.html)
+  guide for the canonical source-build flow, or use the pixi workflow
+  shipped by the [`ros2/ros2`](https://github.com/ros2/ros2) meta-repo.
+- CUDA Toolkit (>= 11.8) on the host.
+- LibTorch: provided automatically by `libtorch_vendor` at build time if a
+  system LibTorch isn't already visible.
 
-## Build
+Per-package build, test, and run details live in each backend's README:
 
-```bash
-# Build CUDA backend
-pixi run build cuda_buffer_backend
-
-# Build Torch backend (includes libtorch_vendor download)
-pixi run build torch_buffer_backend
-```
+- [`cuda_buffer_backend/README.md`](cuda_buffer_backend/README.md)
+- [`torch_buffer_backend/README.md`](torch_buffer_backend/README.md)
+- Demo: [`../rosidl_buffer_backends_tutorials/README.md`](../rosidl_buffer_backends_tutorials/README.md)
 
 ## API overview
 
@@ -41,20 +42,29 @@ pixi run build torch_buffer_backend
 ```cpp
 #include "cuda_buffer/cuda_buffer_api.hpp"
 
-// Publisher: allocate + write directly via kernel
+// Publisher: allocate + write directly via kernel.
 auto msg = cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(byte_count);
-auto wh = cuda_buffer_backend::from_buffer(msg.data, stream);
-my_kernel<<<...>>>(wh.get_ptr(), ...);
+{
+  auto wh = cuda_buffer_backend::from_buffer(msg.data, stream);
+  my_kernel<<<...>>>(wh.get_ptr(), ...);
+}  // wh destructor records the write event on `stream`
 
-// Publisher: create a CUDA buffer from a host pointer
-msg.data = cuda_buffer_backend::to_buffer(host_ptr, byte_count, stream);
+// Publisher: copy from an existing host/device pointer into a pre-allocated buffer.
+{
+  auto wh = cuda_buffer_backend::from_buffer(msg.data, stream);
+  cuda_buffer_backend::to_buffer(host_ptr, byte_count, wh, stream,
+    cudaMemcpyHostToDevice);
+}
 
-// Subscriber: get read handle (waits on write event)
+// Subscriber: read handle (waits on publisher's write event).
 auto rh = cuda_buffer_backend::from_buffer(msg->data, stream);
 use_data<<<...>>>(rh.get_ptr(), ...);
 
-// Promote any buffer to CUDA (e.g. CPU fallback)
-auto cuda_buf = cuda_buffer_backend::to_buffer(msg->data, stream);
+// Auto-promotion: passing a non-CUDA buffer allocates a fresh CUDA buffer
+// and (for reads) copies H2D; the handle owns the new buffer via
+// get_promoted_buffer().
+auto rh_any = cuda_buffer_backend::from_buffer(cpu_or_other_buf, stream);
+std::shared_ptr<rosidl::Buffer<uint8_t>> promoted = rh_any.get_promoted_buffer();
 ```
 
 ### Torch buffer backend (`torch_buffer_backend`)
@@ -62,16 +72,21 @@ auto cuda_buf = cuda_buffer_backend::to_buffer(msg->data, stream);
 ```cpp
 #include "torch_buffer/torch_buffer_api.hpp"
 
-// Publisher: create a torch buffer from a tensor
-msg.data = torch_buffer_backend::to_buffer(tensor);
+// Publisher: allocate + copy a tensor into the message.
+auto msg = torch_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(
+  {H, W, C}, torch::kByte);
+torch_buffer_backend::to_buffer(msg.data, tensor);
 
-// Subscriber: get a tensor view
+// Subscriber: safe default returns an independent clone.
 at::Tensor t = torch_buffer_backend::from_buffer(msg->data);
 
-// Promote any buffer to torch (e.g. CPU fallback)
-auto torch_buf = torch_buffer_backend::to_buffer(msg->data);
-at::Tensor t = torch_buffer_backend::from_buffer(torch_buf);
+// Subscriber: zero-copy view (returns `const at::Tensor`) when the caller
+// is certain it will not mutate the tensor in place.
+const at::Tensor view = torch_buffer_backend::from_buffer<false>(msg->data);
 ```
+
+The torch backend does not cross-device-promote: the returned tensor stays
+on the same device as the underlying torch buffer (CUDA or CPU).
 
 ## License
 

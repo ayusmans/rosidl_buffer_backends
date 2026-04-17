@@ -4,11 +4,17 @@ CUDA buffer backend plugin for the ROS 2 Buffer system. Enables zero-copy GPU me
 
 ## Build
 
-```bash
-# 1. Install system dependencies (CUDA toolkit)
-rosdep install --from-paths src/rosidl_buffer_backends --ignore-src -y
+Requires a ROS 2 Rolling source workspace; see
+[Building ROS 2 on Ubuntu](https://docs.ros.org/en/rolling/Installation/Alternatives/Ubuntu-Development-Setup.html)
+for the canonical setup. After cloning this repo into your workspace's
+`src/` directory:
 
-# 2. Build the CUDA backend
+```bash
+# Install system dependencies (CUDA toolkit, etc.).
+rosdep install --from-paths src --ignore-src -y \
+  --skip-keys "fastcdr rti-connext-dds-7.7.0 urdfdom_headers qt6-svg-dev"
+
+# Build the CUDA backend.
 colcon build --symlink-install --packages-up-to cuda_buffer_backend
 source install/setup.sh
 ```

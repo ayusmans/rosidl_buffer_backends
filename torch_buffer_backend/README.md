@@ -2,29 +2,31 @@
 
 PyTorch buffer backend plugin for the ROS 2 Buffer system. Wraps CUDA/CPU device buffers with tensor metadata (shape, strides, dtype) and provides `allocate_msg`, `from_buffer`, and `to_buffer` APIs for zero-copy GPU tensor sharing.
 
-For setup instructions, see the [ros2 meta repo](https://github.com/yuanknv/ros2).
-
 ## Build
 
-The torch packages auto-detect available device backends at compile time.
-For GPU acceleration, build `cuda_buffer_backend` first and source the
-install so its CMake config is visible when `torch_buffer` is configured.
+Requires a ROS 2 Rolling source workspace; see
+[Building ROS 2 on Ubuntu](https://docs.ros.org/en/rolling/Installation/Alternatives/Ubuntu-Development-Setup.html)
+for the canonical setup. The torch packages auto-detect available device
+backends at compile time: for GPU acceleration, build and source
+`cuda_buffer_backend` first so its CMake config is visible when
+`torch_buffer` is configured. Without it, `torch_buffer` falls back to CPU
+automatically.
+
+After cloning this repo into your workspace's `src/` directory:
 
 ```bash
-# 1. Install system dependencies
-rosdep install --from-paths src/rosidl_buffer_backends --ignore-src -y
+# Install system dependencies.
+rosdep install --from-paths src --ignore-src -y \
+  --skip-keys "fastcdr rti-connext-dds-7.7.0 urdfdom_headers qt6-svg-dev"
 
-# 2. (Optional) Build CUDA device backend for GPU support, then source
+# (Optional) Build the CUDA device backend first for GPU support.
 colcon build --symlink-install --packages-up-to cuda_buffer_backend && \
   source install/setup.sh
 
-# 3. Build torch packages
+# Build the torch packages.
 colcon build --symlink-install --packages-up-to torch_buffer_backend
 source install/setup.sh
 ```
-
-If `cuda_buffer_backend` is not installed, `torch_buffer` falls back to
-CPU automatically.
 
 ## Test
 
