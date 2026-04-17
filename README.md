@@ -80,9 +80,9 @@ torch_buffer_backend::to_buffer(msg.data, tensor);
 // Subscriber: safe default returns an independent clone.
 at::Tensor t = torch_buffer_backend::from_buffer(msg->data);
 
-// Subscriber: zero-copy view (returns `const at::Tensor`) when the caller
-// is certain it will not mutate the tensor in place.
-const at::Tensor view = torch_buffer_backend::from_buffer<false>(msg->data);
+// Subscriber: zero-copy view when the caller is certain it will not mutate
+// the tensor in place. Caller must treat the returned tensor as read-only.
+at::Tensor view = torch_buffer_backend::from_buffer(msg->data, /*clone=*/false);
 ```
 
 The torch backend does not cross-device-promote: the returned tensor stays

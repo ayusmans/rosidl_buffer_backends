@@ -139,8 +139,7 @@ On the subscriber side (const buffer) `from_buffer` defaults to returning an
 independent copy of the buffer contents so subscribers can safely mutate
 the tensor without corrupting shared memory. For CUDA this is a D2D clone;
 for CPU it is a host copy. If the subscriber is certain it will not mutate
-the tensor in place, call `from_buffer<false>(data)`, which returns a
-`const at::Tensor` zero-copy view.
+the tensor in place, pass `clone=false` for a zero-copy view.
 
 ```cpp
 #include "torch_buffer/torch_buffer_api.hpp"

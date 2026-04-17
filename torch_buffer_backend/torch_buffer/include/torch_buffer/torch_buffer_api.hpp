@@ -23,7 +23,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -346,20 +345,18 @@ inline at::Tensor from_buffer(rosidl::Buffer<uint8_t> & buffer)
 }
 
 /// \brief Get a read-only tensor of a torch buffer (uses stored metadata).
-/// \tparam Clone If true (default), returns an independent copy (\c at::Tensor)
-/// that subscribers can safely mutate. If false, returns a \c const at::Tensor
-/// that directly views the buffer's memory (zero-copy); the returned tensor
-/// owns a \c ReadHandle via its deleter, so the source buffer stays alive
-/// until the tensor is destroyed. The \c const signals that the caller must
-/// not mutate the tensor in place.
-template<bool Clone = true>
-inline std::conditional_t<Clone, at::Tensor, const at::Tensor>
-from_buffer(const rosidl::Buffer<uint8_t> & buffer)
+/// \param clone If true (default), returns an independent copy that the
+/// caller can safely mutate. If false, returns a tensor that directly views
+/// the buffer's memory (zero-copy); the returned tensor owns a
+/// \c ReadHandle via its deleter, so the source buffer stays alive until
+/// the tensor is destroyed. The caller must treat a non-cloned tensor as
+/// read-only; mutating it corrupts the shared buffer memory.
+inline at::Tensor from_buffer(const rosidl::Buffer<uint8_t> & buffer, bool clone = true)
 {
   if (buffer.empty()) {return {};}
   const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
   at::ScalarType dtype = string_to_scalar_type(impl->dtype());
-  return detail::wrap_impl<false>(impl, impl->shape(), impl->strides(), dtype, Clone);
+  return detail::wrap_impl<false>(impl, impl->shape(), impl->strides(), dtype, clone);
 }
 
 /// \brief Get a writable tensor view with explicit shape, strides, and dtype.
@@ -375,18 +372,17 @@ inline at::Tensor from_buffer(
 }
 
 /// \brief Get a read-only tensor with explicit shape, strides, and dtype.
-/// \tparam Clone See the single-argument overload; defaults to true.
-template<bool Clone = true>
-inline std::conditional_t<Clone, at::Tensor, const at::Tensor>
-from_buffer(
+/// \param clone See the simpler overload; defaults to true.
+inline at::Tensor from_buffer(
   const rosidl::Buffer<uint8_t> & buffer,
   const std::vector<int64_t> & shape,
   const std::vector<int64_t> & strides = {},
-  at::ScalarType dtype = at::kByte)
+  at::ScalarType dtype = at::kByte,
+  bool clone = true)
 {
   if (buffer.empty()) {return {};}
   const auto * impl = detail::get_torch_impl<uint8_t>(buffer);
-  return detail::wrap_impl<false>(impl, shape, strides, dtype, Clone);
+  return detail::wrap_impl<false>(impl, shape, strides, dtype, clone);
 }
 
 }  // namespace torch_buffer_backend
