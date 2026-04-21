@@ -17,7 +17,7 @@ find_package(pluginlib REQUIRED)
 find_package(cuda_buffer REQUIRED)
 find_package(cuda_buffer_backend_msgs REQUIRED)
 find_package(rcutils REQUIRED)
-find_package(rosidl_typesupport_fastrtps_cpp REQUIRED)
+find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
 add_library(${PROJECT_NAME} SHARED
@@ -30,16 +30,23 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
-  cuda_buffer_backend_msgs::cuda_buffer_backend_msgs__rosidl_typesupport_fastrtps_cpp
+  ${cuda_buffer_backend_msgs_TARGETS}
   rosidl_buffer_backend::rosidl_buffer_backend
   rosidl_runtime_cpp::rosidl_runtime_cpp
   rosidl_buffer_backend_registry::rosidl_buffer_backend_registry
-  rosidl_typesupport_fastrtps_cpp::rosidl_typesupport_fastrtps_cpp
+  rosidl_typesupport_cpp::rosidl_typesupport_cpp
   pluginlib::pluginlib
   cuda_buffer::cuda_buffer
   rcutils::rcutils
   CUDA::cudart
   CUDA::cuda_driver
+)
+
+# The plugin is dlopen'd by pluginlib at runtime; its install RPATH needs the
+# CUDA toolkit library directory so libcudart.so.<abi> can be resolved without
+# relying on the caller's LD_LIBRARY_PATH.
+set_target_properties(${PROJECT_NAME} PROPERTIES
+  INSTALL_RPATH_USE_LINK_PATH TRUE
 )
 
 install(
@@ -68,7 +75,7 @@ ament_export_dependencies(
   rosidl_buffer_backend
   rosidl_runtime_cpp
   rosidl_buffer_backend_registry
-  rosidl_typesupport_fastrtps_cpp
+  rosidl_typesupport_cpp
   pluginlib
   cuda_buffer
   cuda_buffer_backend_msgs
