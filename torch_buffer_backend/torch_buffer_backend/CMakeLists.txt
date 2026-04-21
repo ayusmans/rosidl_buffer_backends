@@ -13,6 +13,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_buffer_backend REQUIRED)
 find_package(rosidl_buffer_backend_registry REQUIRED)
 find_package(rosidl_runtime_cpp REQUIRED)
+find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(torch_buffer REQUIRED)
 find_package(torch_buffer_backend_msgs REQUIRED)
@@ -41,10 +42,11 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
   ${TORCH_LIBRARIES}
-  torch_buffer_backend_msgs::torch_buffer_backend_msgs__rosidl_typesupport_fastrtps_cpp
+  ${torch_buffer_backend_msgs_TARGETS}
   rosidl_buffer_backend::rosidl_buffer_backend
   rosidl_runtime_cpp::rosidl_runtime_cpp
   rosidl_buffer_backend_registry::rosidl_buffer_backend_registry
+  rosidl_typesupport_cpp::rosidl_typesupport_cpp
   pluginlib::pluginlib
   torch_buffer::torch_buffer
   rcutils::rcutils
@@ -76,6 +78,7 @@ ament_export_dependencies(
   rosidl_buffer_backend
   rosidl_buffer_backend_registry
   rosidl_runtime_cpp
+  rosidl_typesupport_cpp
   pluginlib
   torch_buffer
   torch_buffer_backend_msgs
