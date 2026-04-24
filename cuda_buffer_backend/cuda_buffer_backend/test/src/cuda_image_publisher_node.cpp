@@ -115,15 +115,3 @@ private:
 };
 
 RCLCPP_COMPONENTS_REGISTER_NODE(CudaImagePublisher)
-
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-
-  auto node = std::make_shared<CudaImagePublisher>(rclcpp::NodeOptions());
-
-  rclcpp::spin(node);
-
-  rclcpp::shutdown();
-  return 0;
-}

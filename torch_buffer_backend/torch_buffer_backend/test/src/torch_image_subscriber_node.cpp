@@ -162,12 +162,3 @@ private:
 };
 
 RCLCPP_COMPONENTS_REGISTER_NODE(TorchImageSubscriber)
-
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  auto node = std::make_shared<TorchImageSubscriber>(rclcpp::NodeOptions());
-  rclcpp::spin(node);
-  rclcpp::shutdown();
-  return 0;
-}

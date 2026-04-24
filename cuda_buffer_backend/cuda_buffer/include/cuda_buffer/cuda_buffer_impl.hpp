@@ -19,7 +19,6 @@
 
 #include <algorithm>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <utility>
 
@@ -156,20 +155,14 @@ public:
 
   static std::shared_ptr<CudaMemoryPool> get_or_create_global_pool()
   {
-    static std::shared_ptr<CudaMemoryPool> global_pool;
-    static std::mutex pool_mutex;
-
-    std::lock_guard<std::mutex> lock(pool_mutex);
-
-    if (!global_pool) {
-      global_pool = std::make_shared<CudaMemoryPool>();
-      CUresult r = global_pool->create();
-      if (r != CUDA_SUCCESS) {
-        global_pool.reset();
-        throw CudaError(__FILE__, __LINE__, "CudaMemoryPool::create", r);
-      }
-    }
-
+    static std::shared_ptr<CudaMemoryPool> global_pool = [] {
+        auto pool = std::make_shared<CudaMemoryPool>();
+        const CUresult r = pool->create();
+        if (r != CUDA_SUCCESS) {
+          throw CudaError(__FILE__, __LINE__, "CudaMemoryPool::create", r);
+        }
+        return pool;
+      }();
     return global_pool;
   }
 

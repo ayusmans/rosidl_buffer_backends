@@ -100,10 +100,14 @@ struct CachedImport
   CachedImport & operator=(CachedImport && other) noexcept;
 };
 
-// Intentionally leaked: the map is heap-allocated and never destroyed so that
-// CachedImport destructors (which call cuMemUnmap / cuMemRelease) do not run
-// during static destruction when the CUDA driver may already be torn down.
-// The CUDA driver reclaims all VMM resources on context destruction.
+// Intentionally leaked: the map is heap-allocated and never destroyed.
+// CachedImport::~CachedImport() calls cuMemUnmap / cuMemRelease, which are
+// unsafe to invoke during static destruction because the CUDA driver's own
+// statics may already have been torn down by then. Leaking is preferred:
+// the driver reclaims all VMM resources on context destruction, and the OS
+// reclaims the heap allocation when the process exits.
+// Do NOT replace with a Meyers-static value or unique_ptr - those would
+// run the destructor at program exit.
 static std::unordered_map<ImportCacheKey, CachedImport, ImportCacheKeyHash> &
 get_import_cache()
 {
@@ -114,8 +118,8 @@ get_import_cache()
 
 static std::mutex & get_import_cache_mutex()
 {
-  static auto * mtx = new std::mutex();
-  return *mtx;
+  static std::mutex mtx;
+  return mtx;
 }
 
 CachedImport::~CachedImport()

@@ -28,6 +28,11 @@ namespace cuda_buffer_backend
 class CudaBuffer::BufferRecycler
 {
 public:
+  // Reference-counted lazy singleton: created on first use, torn down
+  // (joining its worker thread) once the last CudaBuffer releases its
+  // reference. A Meyers-static shared_ptr would keep the recycler (and its
+  // thread) alive until program exit, which we explicitly want to avoid.
+  // The mutex protects the non-atomic weak_ptr::lock() + reassignment.
   static std::shared_ptr<BufferRecycler> get_instance()
   {
     static std::weak_ptr<BufferRecycler> weak;

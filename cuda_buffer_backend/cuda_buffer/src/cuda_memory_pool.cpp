@@ -118,10 +118,15 @@ VmmBlock * CudaMemoryPool::allocate(size_t byte_size)
   auto it = free_blocks_.lower_bound(aligned);
   if (it != free_blocks_.end() && !it->second.empty()) {
     auto & vec = it->second;
-    for (auto vit = vec.begin(); vit != vec.end(); ++vit) {
-      if (is_block_ready(*vit)) {
-        VmmBlock * block = *vit;
-        vec.erase(vit);
+    // Linear scan for a ready block. Order within the bucket is irrelevant,
+    // so swap-and-pop gives O(1) removal without the shift std::vector::erase
+    // would incur. A std::list would also give O(1) erase, but its scattered
+    // heap nodes cost more per-iteration than the cache-friendly vector scan.
+    for (size_t i = 0; i < vec.size(); ++i) {
+      if (is_block_ready(vec[i])) {
+        VmmBlock * block = vec[i];
+        vec[i] = vec.back();
+        vec.pop_back();
         if (vec.empty()) {
           free_blocks_.erase(it);
         }
