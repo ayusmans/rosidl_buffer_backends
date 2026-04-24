@@ -124,15 +124,7 @@ MsgT allocate_msg(
 {
   c10::DeviceType dev = device.value_or(detail::default_device());
 
-  int64_t numel = 1;
-  for (auto s : shape) {
-    if (s < 0) {
-      throw std::runtime_error(
-        "allocate_msg: negative shape dimension (" + std::to_string(s) + ")");
-    }
-    numel *= s;
-  }
-  size_t byte_count = static_cast<size_t>(numel) * scalar_type_size(dtype);
+  size_t byte_count = required_byte_size(shape, {}, scalar_type_size(dtype));
 
   std::vector<int64_t> contiguous_strides(shape.size());
   int64_t stride_val = 1;

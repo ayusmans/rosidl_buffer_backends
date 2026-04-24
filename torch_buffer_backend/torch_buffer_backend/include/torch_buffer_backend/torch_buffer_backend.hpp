@@ -90,6 +90,19 @@ public:
       static_cast<const torch_buffer_backend_msgs::msg::TorchBufferDescriptor *>(
       descriptor_ptr);
 
+    std::vector<int64_t> shape(descriptor->shape.begin(), descriptor->shape.end());
+    std::vector<int64_t> strides(descriptor->strides.begin(), descriptor->strides.end());
+
+    size_t element_size = scalar_type_size(string_to_scalar_type(descriptor->dtype));
+    size_t required = required_byte_size(shape, strides, element_size);
+    size_t available = descriptor->device_data.size();
+    if (required > available) {
+      throw std::runtime_error(
+              "torch_buffer_backend: descriptor tensor view (" +
+              std::to_string(required) + " bytes) exceeds device_data (" +
+              std::to_string(available) + " bytes)");
+    }
+
     rosidl::Buffer<uint8_t> local_buffer;
     if (!descriptor->device_data.empty()) {
       local_buffer = rosidl::Buffer<uint8_t>(descriptor->device_data);
@@ -97,8 +110,8 @@ public:
 
     auto result = std::make_unique<TorchBufferImpl<uint8_t>>(
       std::move(local_buffer),
-      std::vector<int64_t>(descriptor->shape.begin(), descriptor->shape.end()),
-      std::vector<int64_t>(descriptor->strides.begin(), descriptor->strides.end()),
+      std::move(shape),
+      std::move(strides),
       descriptor->dtype);
 
     return {result.release(), [](void * p) {
