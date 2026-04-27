@@ -170,7 +170,8 @@ inline void to_buffer(rosidl::Buffer<uint8_t> & buffer, const at::Tensor & tenso
   }
 
   at::Tensor contig = tensor.contiguous();
-  size_t byte_count = contig.numel() * contig.element_size();
+  size_t byte_count = required_byte_size(
+    contig.sizes().vec(), {}, static_cast<size_t>(contig.element_size()));
 
   auto * torch_impl = detail::get_torch_impl<uint8_t>(buffer);
 
