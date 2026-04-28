@@ -32,23 +32,23 @@ from std_msgs.msg import Bool, UInt32
 @pytest.mark.launch_test
 @launch_testing.markers.keep_alive
 def generate_test_description():
-    """Generate launch description for Torch image intra-process test with FastRTPS."""
+    """Launch an intra-process tensor pub/sub pair over FastRTPS."""
     container = ComposableNodeContainer(
-        name='torch_image_intraprocess_container',
+        name='torch_tensor_intraprocess_container',
         namespace='',
         package='rclcpp_components',
         executable='component_container',
         composable_node_descriptions=[
             ComposableNode(
-                package='torch_buffer_backend',
-                plugin='TorchImagePublisher',
-                name='torch_image_publisher',
+                package='torch_tensor_api',
+                plugin='TorchTensorPublisher',
+                name='torch_tensor_publisher',
                 extra_arguments=[{'use_intra_process_comms': True}],
             ),
             ComposableNode(
-                package='torch_buffer_backend',
-                plugin='TorchImageSubscriber',
-                name='torch_image_subscriber',
+                package='torch_tensor_api',
+                plugin='TorchTensorSubscriber',
+                name='torch_tensor_subscriber',
                 extra_arguments=[{'use_intra_process_comms': True}],
             ),
         ],
@@ -62,8 +62,7 @@ def generate_test_description():
     ])
 
 
-class TestTorchImageIntraPubSubFastRTPS(unittest.TestCase):
-    """Test Torch Buffer-based Image intra-process pub/sub over FastRTPS."""
+class TestTorchTensorIntraPubSubFastRTPS(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
@@ -74,7 +73,7 @@ class TestTorchImageIntraPubSubFastRTPS(unittest.TestCase):
         rclpy.shutdown()
 
     def setUp(self):
-        self.node = rclpy.create_node('test_torch_image_intra_pubsub_fastrtps')
+        self.node = rclpy.create_node('test_torch_tensor_intra_pubsub_fastrtps')
         self.publisher_count = 0
         self.subscriber_count = 0
         self.validation_passed = True
@@ -105,7 +104,6 @@ class TestTorchImageIntraPubSubFastRTPS(unittest.TestCase):
         return self.subscriber_count >= target_count
 
     def test_intra_process_pubsub(self):
-        """Test torch buffer-based intra-process image pub/sub over FastRTPS."""
         success = self._spin_until(target_count=5, timeout_sec=15.0)
 
         self.assertTrue(
@@ -117,7 +115,7 @@ class TestTorchImageIntraPubSubFastRTPS(unittest.TestCase):
             f'Publisher should have sent at least 5 messages. '
             f'Sent: {self.publisher_count}')
         self.assertTrue(
-            self.validation_passed, 'Image validation failed (intra-process)')
+            self.validation_passed, 'Tensor validation failed (intra-process)')
         self.assertLessEqual(
             abs(self.publisher_count - self.subscriber_count), 2,
             f'Publisher count ({self.publisher_count}) and subscriber count '
@@ -125,8 +123,7 @@ class TestTorchImageIntraPubSubFastRTPS(unittest.TestCase):
 
 
 @launch_testing.post_shutdown_test()
-class TestTorchImageIntraPubSubFastRTPSShutdown(unittest.TestCase):
-    """Test proper shutdown of intra-process node."""
+class TestTorchTensorIntraPubSubFastRTPSShutdown(unittest.TestCase):
 
     def test_exit_codes(self, proc_info):
         launch_testing.asserts.assertExitCodes(

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(torch_buffer_backend_msgs)
+project(torch_tensor_msgs)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
@@ -13,7 +13,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/TorchBufferDescriptor.msg"
+  "msg/Tensor.msg"
 )
 
 if(BUILD_TESTING)

@@ -33,9 +33,9 @@ from std_msgs.msg import Bool, UInt32
 def generate_test_description():
     """One publisher, two subscribers (1-to-N fan-out) over FastRTPS."""
     publisher_node = Node(
-        package='torch_buffer_backend',
-        executable='torch_image_publisher_node',
-        name='torch_image_publisher',
+        package='torch_tensor_api',
+        executable='torch_tensor_publisher_node',
+        name='torch_tensor_publisher',
         output='screen',
         parameters=[{
             'max_publish_count': 0,
@@ -44,9 +44,9 @@ def generate_test_description():
     )
 
     subscriber1_node = Node(
-        package='torch_buffer_backend',
-        executable='torch_image_subscriber_node',
-        name='torch_image_subscriber_1',
+        package='torch_tensor_api',
+        executable='torch_tensor_subscriber_node',
+        name='torch_tensor_subscriber_1',
         output='screen',
         remappings=[
             ('subscriber_count', 'subscriber_1_count'),
@@ -55,9 +55,9 @@ def generate_test_description():
     )
 
     subscriber2_node = Node(
-        package='torch_buffer_backend',
-        executable='torch_image_subscriber_node',
-        name='torch_image_subscriber_2',
+        package='torch_tensor_api',
+        executable='torch_tensor_subscriber_node',
+        name='torch_tensor_subscriber_2',
         output='screen',
         remappings=[
             ('subscriber_count', 'subscriber_2_count'),
@@ -76,7 +76,7 @@ def generate_test_description():
     ])
 
 
-class TestTorchImageMultiSubFastRTPS(unittest.TestCase):
+class TestTorchTensorMultiSubFastRTPS(unittest.TestCase):
     """1-to-N: one publisher sending to two subscribers over FastRTPS."""
 
     @classmethod
@@ -88,7 +88,7 @@ class TestTorchImageMultiSubFastRTPS(unittest.TestCase):
         rclpy.shutdown()
 
     def setUp(self):
-        self.node = rclpy.create_node('test_torch_image_multi_sub_fastrtps')
+        self.node = rclpy.create_node('test_torch_tensor_multi_sub_fastrtps')
         self.publisher_count = 0
         self.subscriber1_count = 0
         self.subscriber2_count = 0
@@ -156,7 +156,7 @@ class TestTorchImageMultiSubFastRTPS(unittest.TestCase):
 
 
 @launch_testing.post_shutdown_test()
-class TestTorchImageMultiSubFastRTPSShutdown(unittest.TestCase):
+class TestTorchTensorMultiSubFastRTPSShutdown(unittest.TestCase):
     """Test proper shutdown of nodes."""
 
     def test_exit_codes(self, proc_info):

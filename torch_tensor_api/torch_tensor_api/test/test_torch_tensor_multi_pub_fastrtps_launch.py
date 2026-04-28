@@ -33,9 +33,9 @@ from std_msgs.msg import Bool, UInt32
 def generate_test_description():
     """Two publishers, one subscriber (N-to-1 fan-in) over FastRTPS."""
     publisher1_node = Node(
-        package='torch_buffer_backend',
-        executable='torch_image_publisher_node',
-        name='torch_image_publisher_1',
+        package='torch_tensor_api',
+        executable='torch_tensor_publisher_node',
+        name='torch_tensor_publisher_1',
         output='screen',
         parameters=[{
             'max_publish_count': 0,
@@ -47,9 +47,9 @@ def generate_test_description():
     )
 
     publisher2_node = Node(
-        package='torch_buffer_backend',
-        executable='torch_image_publisher_node',
-        name='torch_image_publisher_2',
+        package='torch_tensor_api',
+        executable='torch_tensor_publisher_node',
+        name='torch_tensor_publisher_2',
         output='screen',
         parameters=[{
             'max_publish_count': 0,
@@ -61,9 +61,9 @@ def generate_test_description():
     )
 
     subscriber_node = Node(
-        package='torch_buffer_backend',
-        executable='torch_image_subscriber_node',
-        name='torch_image_subscriber',
+        package='torch_tensor_api',
+        executable='torch_tensor_subscriber_node',
+        name='torch_tensor_subscriber',
         output='screen',
     )
 
@@ -78,7 +78,7 @@ def generate_test_description():
     ])
 
 
-class TestTorchImageMultiPubFastRTPS(unittest.TestCase):
+class TestTorchTensorMultiPubFastRTPS(unittest.TestCase):
     """N-to-1: two publishers sending to one subscriber over FastRTPS."""
 
     @classmethod
@@ -90,7 +90,7 @@ class TestTorchImageMultiPubFastRTPS(unittest.TestCase):
         rclpy.shutdown()
 
     def setUp(self):
-        self.node = rclpy.create_node('test_torch_image_multi_pub_fastrtps')
+        self.node = rclpy.create_node('test_torch_tensor_multi_pub_fastrtps')
         self.publisher1_count = 0
         self.publisher2_count = 0
         self.subscriber_count = 0
@@ -120,7 +120,7 @@ class TestTorchImageMultiPubFastRTPS(unittest.TestCase):
     def _validation_cb(self, msg):
         self.validation_passed = msg.data
 
-    def _spin_until(self, target_count=5, timeout_sec=30.0):
+    def _spin_until(self, target_count=8, timeout_sec=30.0):
         start = time.time()
         while self.subscriber_count < target_count and time.time() - start < timeout_sec:
             rclpy.spin_once(self.node, timeout_sec=0.1)
@@ -142,11 +142,11 @@ class TestTorchImageMultiPubFastRTPS(unittest.TestCase):
             self.publisher2_count, 3,
             f'Publisher2 should have sent at least 3 messages. '
             f'Sent: {self.publisher2_count}')
-        self.assertTrue(self.validation_passed, 'Image validation failed')
+        self.assertTrue(self.validation_passed, 'Tensor validation failed')
 
 
 @launch_testing.post_shutdown_test()
-class TestTorchImageMultiPubFastRTPSShutdown(unittest.TestCase):
+class TestTorchTensorMultiPubFastRTPSShutdown(unittest.TestCase):
     """Test proper shutdown of nodes."""
 
     def test_exit_codes(self, proc_info):
