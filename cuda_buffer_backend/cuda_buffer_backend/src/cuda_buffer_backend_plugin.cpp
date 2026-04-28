@@ -250,13 +250,10 @@ std::unique_ptr<void, void (*)(void *)> CudaBufferBackend::from_descriptor_with_
         descriptor->ipc_uid);
 
       IPCMetadata * meta = import_result.ipc_meta;
-      int32_t src_pid = descriptor->vmm_pid;
-      uint32_t src_block = descriptor->vmm_block_id;
-      auto deleter = [meta, src_pid, src_block](uint8_t *) {
+      auto deleter = [meta](uint8_t *) {
           if (meta) {
             meta->refcount.fetch_sub(1, std::memory_order_release);
           }
-          CudaVmmIPCManager::release_import(src_pid, src_block);
         };
       CudaBuffer imported_buffer(
         reinterpret_cast<void *>(import_result.va), byte_size, deleter);

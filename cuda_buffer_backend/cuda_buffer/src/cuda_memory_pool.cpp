@@ -21,6 +21,7 @@
 
 #include <rcutils/logging_macros.h>
 
+#include <cerrno>
 #include <chrono>
 #include <string>
 
@@ -240,16 +241,24 @@ VmmBlock * CudaMemoryPool::create_block(size_t aligned_size)
     shm_unlink(shm_name.c_str());
     int shm_fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0666);
     if (shm_fd >= 0) {
-      ftruncate(shm_fd, sizeof(IPCMetadata));
-      void * ptr = mmap(nullptr, sizeof(IPCMetadata),
-        PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-      if (ptr != MAP_FAILED) {
-        block->ipc_meta = new(ptr) IPCMetadata();
-        block->shm_fd = shm_fd;
-        block->shm_name = shm_name;
-      } else {
+      if (ftruncate(shm_fd, sizeof(IPCMetadata)) != 0) {
+        RCUTILS_LOG_WARN_NAMED("cuda_memory_pool",
+          "ftruncate failed for IPC metadata segment '%s' (errno=%d); "
+          "block will be created without IPC metadata",
+          shm_name.c_str(), errno);
         close(shm_fd);
         shm_unlink(shm_name.c_str());
+      } else {
+        void * ptr = mmap(nullptr, sizeof(IPCMetadata),
+          PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+        if (ptr != MAP_FAILED) {
+          block->ipc_meta = new(ptr) IPCMetadata();
+          block->shm_fd = shm_fd;
+          block->shm_name = shm_name;
+        } else {
+          close(shm_fd);
+          shm_unlink(shm_name.c_str());
+        }
       }
     }
   }

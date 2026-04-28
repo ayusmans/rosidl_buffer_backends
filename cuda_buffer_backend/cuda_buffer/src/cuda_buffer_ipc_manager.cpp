@@ -100,14 +100,6 @@ struct CachedImport
   CachedImport & operator=(CachedImport && other) noexcept;
 };
 
-// Intentionally leaked: the map is heap-allocated and never destroyed.
-// CachedImport::~CachedImport() calls cuMemUnmap / cuMemRelease, which are
-// unsafe to invoke during static destruction because the CUDA driver's own
-// statics may already have been torn down by then. Leaking is preferred:
-// the driver reclaims all VMM resources on context destruction, and the OS
-// reclaims the heap allocation when the process exits.
-// Do NOT replace with a Meyers-static value or unique_ptr - those would
-// run the destructor at program exit.
 static std::unordered_map<ImportCacheKey, CachedImport, ImportCacheKeyHash> &
 get_import_cache()
 {
@@ -368,7 +360,12 @@ void CudaVmmIPCManager::FDDispatcher::handle_client(int server_socket, int fd_to
   cmsg->cmsg_len = CMSG_LEN(sizeof(int));
   memcpy(CMSG_DATA(cmsg), &fd_to_serve, sizeof(int));
 
-  (void)sendmsg(client_socket, &msg, 0);
+  if (sendmsg(client_socket, &msg, 0) < 0) {
+    RCUTILS_LOG_WARN_NAMED(
+      "cuda_buffer_backend",
+      "FDDispatcher: sendmsg failed (errno=%d): FD will not be delivered "
+      "to client; subscriber import will fall back to CPU", errno);
+  }
 
   close(client_socket);
 }
@@ -560,12 +557,6 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
   return {va, ipc_meta};
 }
 
-void CudaVmmIPCManager::release_import(int32_t pid, uint32_t block_id)
-{
-  (void)pid;
-  (void)block_id;
-}
-
 int CudaVmmIPCManager::create_fd_server_socket(const std::string & socket_path)
 {
   unlink(socket_path.c_str());
@@ -620,9 +611,14 @@ int CudaVmmIPCManager::receive_fd_from_socket(const std::string & socket_path)
   msg.msg_controllen = sizeof(ctrl_buf);
 
   ssize_t n = recvmsg(client_socket, &msg, 0);
+  const int recvmsg_errno = errno;
   close(client_socket);
 
   if (n <= 0) {
+    RCUTILS_LOG_WARN_NAMED(
+      "cuda_buffer_backend",
+      "recvmsg on '%s' returned %zd (errno=%d): VMM FD not delivered",
+      socket_path.c_str(), n, n < 0 ? recvmsg_errno : 0);
     return -1;
   }
 

@@ -26,12 +26,37 @@
 #include <rcutils/logging_macros.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 
 namespace host_endpoint_manager
 {
+
+static std::optional<long> parse_override_int_env(
+  const char * name, long min, long max)
+{
+  const char * value = std::getenv(name);
+  if (value == nullptr || *value == '\0') {
+    return std::nullopt;
+  }
+  char * end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(value, &end, 10);
+  if (errno != 0 || end == value || *end != '\0' ||
+    parsed < min || parsed > max)
+  {
+    RCUTILS_LOG_WARN_NAMED(
+      "host_endpoint_manager",
+      "Invalid value for %s='%s' (expected integer in [%ld, %ld]); ignoring",
+      name, value, min, max);
+    return std::nullopt;
+  }
+  return parsed;
+}
 
 static bool sem_wait_timed(sem_t * sem, int timeout_sec = 2)
 {
@@ -151,18 +176,24 @@ HostEndpointManager::HostEndpointManager(size_t domain_id)
     local_device_id_ = device;
   }
 
-  // Allow override for testing cross-device IPC fallback without multiple GPUs.
-  const char * device_override = std::getenv("CUDA_BUFFER_DEVICE_ID_OVERRIDE");
-  if (device_override != nullptr) {
-    local_device_id_ = std::atoi(device_override);
+  // Env-var names for testing IPC fallback paths without requiring multiple
+  // GPUs or users. 
+  // Not intended for production configuration — use only from test launches.
+  constexpr const char * kDeviceIdOverrideEnv = "CUDA_BUFFER_DEVICE_ID_OVERRIDE";
+  constexpr const char * kUidOverrideEnv = "CUDA_BUFFER_UID_OVERRIDE";
+
+  if (auto v = parse_override_int_env(
+      kDeviceIdOverrideEnv, 0, std::numeric_limits<int>::max()))
+  {
+    local_device_id_ = static_cast<int>(*v);
   }
 
   local_uid_ = static_cast<uint32_t>(getuid());
 
-  // Allow override for testing cross-user IPC fallback without multiple users.
-  const char * uid_override = std::getenv("CUDA_BUFFER_UID_OVERRIDE");
-  if (uid_override != nullptr) {
-    local_uid_ = static_cast<uint32_t>(std::atoi(uid_override));
+  if (auto v = parse_override_int_env(
+      kUidOverrideEnv, 0, std::numeric_limits<uint32_t>::max()))
+  {
+    local_uid_ = static_cast<uint32_t>(*v);
   }
 
   char hostname_buf[256];

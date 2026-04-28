@@ -56,8 +56,6 @@ public:
     uint64_t size,
     uint64_t expected_uid);
 
-  static void release_import(int32_t pid, uint32_t block_id);
-
 private:
   static int create_fd_server_socket(const std::string & socket_path);
   static int receive_fd_from_socket(const std::string & socket_path);
