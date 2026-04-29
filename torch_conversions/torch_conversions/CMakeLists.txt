@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(torch_tensor_api)
+project(torch_conversions)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
@@ -11,7 +11,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_buffer REQUIRED)
-find_package(torch_tensor_msgs REQUIRED)
+find_package(tensor_msgs REQUIRED)
 find_package(rmw REQUIRED)
 find_package(rcutils REQUIRED)
 
@@ -40,7 +40,7 @@ target_link_libraries(${PROJECT_NAME}
     rosidl_buffer::rosidl_buffer
     rmw::rmw
     rcutils::rcutils
-    ${torch_tensor_msgs_TARGETS}
+    ${tensor_msgs_TARGETS}
 )
 
 if(_torch_has_cuda AND CUDAToolkit_FOUND)
@@ -66,7 +66,7 @@ install(
 
 ament_export_targets(${PROJECT_NAME})
 ament_export_dependencies(
-  libtorch_vendor rosidl_buffer torch_tensor_msgs rmw rcutils)
+  libtorch_vendor rosidl_buffer tensor_msgs rmw rcutils)
 if(_torch_has_cuda AND CUDAToolkit_FOUND)
   ament_export_dependencies(CUDAToolkit)
 endif()
@@ -84,19 +84,19 @@ if(BUILD_TESTING)
   find_package(std_msgs REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
 
-  ament_add_gtest(test_torch_tensor_api
-    test/test_torch_tensor_api.cpp
+  ament_add_gtest(test_torch_conversions
+    test/test_torch_conversions.cpp
   )
-  if(TARGET test_torch_tensor_api)
-    target_link_libraries(test_torch_tensor_api
+  if(TARGET test_torch_conversions)
+    target_link_libraries(test_torch_conversions
       ${PROJECT_NAME}
       ${TORCH_LIBRARIES}
       rosidl_buffer::rosidl_buffer
-      ${torch_tensor_msgs_TARGETS}
+      ${tensor_msgs_TARGETS}
     )
     if(_torch_has_cuda AND CUDAToolkit_FOUND)
       # CudaError uses cuGetErrorName/cuGetErrorString from the CUDA driver lib
-      target_link_libraries(test_torch_tensor_api CUDA::cuda_driver)
+      target_link_libraries(test_torch_conversions CUDA::cuda_driver)
     endif()
   endif()
 
@@ -111,7 +111,7 @@ if(BUILD_TESTING)
     rclcpp::rclcpp
     rclcpp_components::component
     ${std_msgs_TARGETS}
-    ${torch_tensor_msgs_TARGETS}
+    ${tensor_msgs_TARGETS}
     rosidl_runtime_cpp::rosidl_runtime_cpp
   )
   if(_torch_has_cuda AND CUDAToolkit_FOUND)
@@ -138,7 +138,7 @@ if(BUILD_TESTING)
     rclcpp::rclcpp
     rclcpp_components::component
     ${std_msgs_TARGETS}
-    ${torch_tensor_msgs_TARGETS}
+    ${tensor_msgs_TARGETS}
     rosidl_runtime_cpp::rosidl_runtime_cpp
   )
   if(_torch_has_cuda AND CUDAToolkit_FOUND)

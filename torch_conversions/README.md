@@ -1,7 +1,7 @@
-# torch_tensor_api (DLPack-aligned)
+# torch_conversions (DLPack-aligned)
 
 Header-only helper library that converts between a DLPack-shaped ROS 2
-message (`torch_tensor_msgs/Tensor`) and an `at::Tensor`, riding on top of
+message (`tensor_msgs/Tensor`) and an `at::Tensor`, riding on top of
 whichever `rosidl::Buffer` storage backend is registered at runtime.
 
 The message schema follows [DLPack](https://dmlc.github.io/dlpack/latest/)
@@ -13,8 +13,8 @@ wrapper and interoperate over the wire without re-encoding metadata.
 
 | Package | Description |
 |---|---|
-| `torch_tensor_msgs` | `Tensor.msg` definition: DLPack-aligned `{dtype_code, dtype_bits, dtype_lanes}`, `{device_type, device_id}`, `shape[]`, `strides[]`, `byte_offset`, `data[]`. |
-| `torch_tensor_api` | Header-only library: allocation, `at::Tensor` ↔ `Tensor.msg` conversion, DLPack export, and CUDA stream helpers. |
+| `tensor_msgs` | `Tensor.msg` definition: DLPack-aligned `{dtype_code, dtype_bits, dtype_lanes}`, `{device_type, device_id}`, `shape[]`, `strides[]`, `byte_offset`, `data[]`. |
+| `torch_conversions` | Header-only library: allocation, `at::Tensor` ↔ `Tensor.msg` conversion, DLPack export, and CUDA stream helpers. |
 
 There is no pluginlib plugin, no `BufferImplBase` subclass, and no custom
 descriptor. The `uint8[] data` field maps to `rosidl::Buffer<uint8_t>`,
@@ -52,19 +52,19 @@ Field-for-field transcription of `DLTensor`. Producing or consuming a
 colcon build --symlink-install --packages-up-to cuda_buffer_backend
 source install/setup.sh
 
-colcon build --symlink-install --packages-up-to torch_tensor_api
+colcon build --symlink-install --packages-up-to torch_conversions
 source install/setup.sh
 ```
 
 ## API reference
 
-All entry points are in namespace `torch_tensor_api`. `TensorMsg` is a
-type alias for `torch_tensor_msgs::msg::Tensor`.
+All entry points are in namespace `torch_conversions`. `TensorMsg` is a
+type alias for `tensor_msgs::msg::Tensor`.
 
 ### Allocation
 
 ```cpp
-TensorMsg allocate_tensor(
+TensorMsg allocate_tensor_msg(
   const std::vector<int64_t> & shape,
   at::ScalarType dtype,
   std::optional<c10::DeviceType> device = std::nullopt);
@@ -147,25 +147,25 @@ void         set_dtype(TensorMsg & m, DLDataType d);   // sets the 3 dtype field
 
 `device_type` / `device_id` follow DLPack's `DLDeviceType` enum
 (`kDLCPU=1`, `kDLCUDA=2`, `kDLCUDAHost=3`, `kDLROCm=10`,
-`kDLCUDAManaged=13`, ...). `allocate_tensor` sets these for you.
+`kDLCUDAManaged=13`, ...). `allocate_tensor_msg` sets these for you.
 
 ## Examples
 
 ### Publisher
 
 ```cpp
-#include "torch_tensor_api/torch_tensor_api.hpp"
-#include "torch_tensor_msgs/msg/tensor.hpp"
+#include "torch_conversions/torch_conversions.hpp"
+#include "tensor_msgs/msg/tensor.hpp"
 
 void timer_cb()
 {
-  auto guard = torch_tensor_api::set_stream();
+  auto guard = torch_conversions::set_stream();
 
-  auto msg = torch_tensor_api::allocate_tensor(
+  auto msg = torch_conversions::allocate_tensor_msg(
     {height, width, 3}, torch::kByte);   // CUDA-backed when available
 
   {
-    at::Tensor t = torch_tensor_api::from_tensor_msg(msg);
+    at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
     render_pipeline(t);                  // runs on the guarded stream
   }
 
@@ -176,16 +176,16 @@ void timer_cb()
 ### Subscriber
 
 ```cpp
-void cb(const torch_tensor_msgs::msg::Tensor::SharedPtr msg)
+void cb(const tensor_msgs::msg::Tensor::SharedPtr msg)
 {
-  auto guard = torch_tensor_api::set_stream();
+  auto guard = torch_conversions::set_stream();
 
   // Default clone=true: independent tensor, safe to mutate.
-  at::Tensor in = torch_tensor_api::from_tensor_msg(*msg);
+  at::Tensor in = torch_conversions::from_input_tensor_msg(*msg);
   auto out = model_(in);
 
   // Or zero-copy view (caller guarantees no in-place writes).
-  at::Tensor view = torch_tensor_api::from_tensor_msg(*msg, /*clone=*/false);
+  at::Tensor view = torch_conversions::from_input_tensor_msg(*msg, /*clone=*/false);
 }
 ```
 
@@ -194,70 +194,24 @@ void cb(const torch_tensor_msgs::msg::Tensor::SharedPtr msg)
 ```cpp
 at::Tensor t = compute_something();             // arbitrary at::Tensor
 
-torch_tensor_msgs::msg::Tensor msg;
-torch_tensor_api::to_tensor_msg(msg, t);        // copies data, fills shape/strides/dtype/device
+tensor_msgs::msg::Tensor msg;
+torch_conversions::to_tensor_msg(msg, t);        // copies data, fills shape/strides/dtype/device
 publisher_->publish(msg);
 ```
 
 `to_tensor_msg` copies tensor data into `msg.data` and sets all DLPack
 metadata fields to match `t`.
 
-### Cross-framework interop via DLPack
-
-```cpp
-// Subscriber that hands data straight to a non-torch framework:
-void cb(const torch_tensor_msgs::msg::Tensor::SharedPtr msg)
-{
-  auto guard = torch_tensor_api::set_stream();
-  auto dlm = torch_tensor_api::to_dlpack_owned(*msg);  // RAII
-  some_framework::Tensor t = some_framework::from_dlpack(dlm.release());
-  // some_framework now owns dlm; its deleter will run when `t` dies.
-}
-```
-
-Same approach works on the publisher side (consume a foreign framework's
-`DLManagedTensor`, copy / wrap into `TensorMsg`).
-
-### Strided / byte-offset views
-
-```cpp
-auto msg = torch_tensor_api::allocate_tensor({16}, torch::kInt, c10::kCPU);
-// ... fill the full buffer ...
-
-// Publish only positions [4..7] as a 4-int view into the same storage.
-msg.shape = {4};
-msg.strides = {1};
-msg.byte_offset = 4 * sizeof(int32_t);
-publisher_->publish(msg);
-```
-
-The subscriber's `from_tensor_msg` honors `byte_offset`, so the view
-materializes without copying.
-
-## Cross-framework architecture
-
-```
-  torch_tensor_api    ─┐
-  tf_tensor_bridge     ─┼──  torch_tensor_msgs/Tensor  ──  cuda_buffer_backend (zero-copy)
-  jax_tensor_bridge    ─┘                                  cpu fallback
-```
-
-Publisher written against torch, subscriber written against TensorFlow:
-the subscriber's bridge decodes the DLPack triple, imports the bytes
-into a `tf::Tensor` via `from_dlpack`, and zero-copy GPU transport is
-delivered by `cuda_buffer_backend` underneath. No new message, no
-backend negotiation, no NxN descriptor-compatibility matrix.
-
 ## Testing
 
 ```bash
-colcon test --packages-select torch_tensor_msgs torch_tensor_api
+colcon test --packages-select tensor_msgs torch_conversions
 colcon test-result --verbose
 ```
 
 Coverage:
 
-- `test_torch_tensor_api.cpp` — gtest covering CPU and CUDA paths,
+- `test_torch_conversions.cpp` — gtest covering CPU and CUDA paths,
   DLPack round-trips, dtype helpers, `byte_offset` view materialization.
 - `test_torch_tensor_intra_pubsub_fastrtps_launch.py` — single-process
   pub/sub through RMW, exercises CUDA IPC where available.

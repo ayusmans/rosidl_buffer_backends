@@ -29,22 +29,24 @@
 namespace cuda_buffer_backend
 {
 
-/// \brief Allocate a ROS message with a CUDA-backed buffer of \p count elements.
-template<typename MsgT>
-MsgT allocate_msg(size_t count)
+/// \brief Allocate a fresh CUDA-backed \c rosidl::Buffer<uint8_t> of \p count
+/// bytes. Pure allocation: no handle is acquired, no data is copied. The
+/// caller owns the returned buffer and assigns it wherever the schema needs
+/// it (e.g. `msg.data = allocate_buffer(n)` for messages that follow the
+/// `data` convention, or an arbitrary field on other messages).
+inline rosidl::Buffer<uint8_t> allocate_buffer(size_t count)
 {
-  auto impl = std::make_unique<CudaBufferImpl<uint8_t>>(count);
-  MsgT msg;
-  msg.data = rosidl::Buffer<uint8_t>(std::move(impl));
-  return msg;
+  return rosidl::Buffer<uint8_t>(
+    std::make_unique<CudaBufferImpl<uint8_t>>(count));
 }
 
 namespace detail
 {
 
-/// \brief Allocate a fresh CUDA-backed rosidl::Buffer<uint8_t>.
-/// Pure allocation: no write handle is acquired, no copy is performed.
-inline std::shared_ptr<rosidl::Buffer<uint8_t>> allocate_cuda_buffer(size_t byte_count)
+/// \brief Heap-allocate a fresh CUDA-backed rosidl::Buffer<uint8_t>, held via
+/// shared_ptr so it can ride along with a promoted read/write handle.
+inline std::shared_ptr<rosidl::Buffer<uint8_t>> allocate_cuda_buffer_shared(
+  size_t byte_count)
 {
   auto cuda_impl = std::make_unique<CudaBufferImpl<uint8_t>>(byte_count);
   return std::make_shared<rosidl::Buffer<uint8_t>>(std::move(cuda_impl));
@@ -52,8 +54,7 @@ inline std::shared_ptr<rosidl::Buffer<uint8_t>> allocate_cuda_buffer(size_t byte
 
 inline CudaBufferImpl<uint8_t> * cuda_impl_of(rosidl::Buffer<uint8_t> & buffer)
 {
-  return const_cast<CudaBufferImpl<uint8_t> *>(
-    dynamic_cast<const CudaBufferImpl<uint8_t> *>(buffer.get_impl()));
+  return dynamic_cast<CudaBufferImpl<uint8_t> *>(buffer.get_impl());
 }
 
 }  // namespace detail
@@ -63,28 +64,29 @@ inline CudaBufferImpl<uint8_t> * cuda_impl_of(rosidl::Buffer<uint8_t> & buffer)
 /// directly. If the buffer is non-CUDA (e.g. CPU-backed), a fresh
 /// CUDA-backed \c rosidl::Buffer<uint8_t> is allocated (no H2D copy; the
 /// caller is about to overwrite it) and a write handle for the new buffer
-/// is returned.
+/// is returned. The promoted buffer is attached to the handle via
+/// \c WriteHandle::get_promoted_buffer() so the caller can substitute the
+/// buffer back into the message they're publishing.
 template<typename T>
-WriteHandle from_buffer(
+WriteHandle from_write_buffer(
   rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
   auto * impl = buffer.get_impl();
   if (!impl) {
-    throw CudaError("from_buffer called on buffer with null implementation");
+    throw CudaError("from_write_buffer called on buffer with null implementation");
   }
   if (buffer.size() == 0) {
-    throw CudaError("from_buffer called on empty buffer");
+    throw CudaError("from_write_buffer called on empty buffer");
   }
-  auto * cuda_impl = const_cast<CudaBufferImpl<T> *>(
-    dynamic_cast<const CudaBufferImpl<T> *>(impl));
+  auto * cuda_impl = dynamic_cast<CudaBufferImpl<T> *>(impl);
   if (cuda_impl) {
     cuda_impl->set_stream(stream);
     return cuda_impl->get_cuda_buffer().get_write_handle(stream);
   }
 
   size_t byte_count = buffer.size() * sizeof(T);
-  auto promoted = detail::allocate_cuda_buffer(byte_count);
+  auto promoted = detail::allocate_cuda_buffer_shared(byte_count);
   auto * promoted_impl = detail::cuda_impl_of(*promoted);
   promoted_impl->set_stream(stream);
   auto wh = promoted_impl->get_cuda_buffer().get_write_handle(stream);
@@ -93,21 +95,21 @@ WriteHandle from_buffer(
 }
 
 /// \brief Acquire a read handle for a CUDA-backed buffer.
-/// \details If \p buffer is already CUDA-backed, returns a read handle directly.
-/// If the buffer is non-CUDA (e.g. CPU-backed), a new CUDA-backed
-/// rosidl::Buffer<uint8_t> is allocated, the source contents are copied host-to-device,
-/// and a read handle for the new buffer is returned.
+/// \details If \p buffer is already CUDA-backed, returns a read handle
+/// directly. If the buffer is non-CUDA (e.g. CPU-backed), a new CUDA-backed
+/// \c rosidl::Buffer<uint8_t> is allocated, the source contents are copied
+/// host-to-device, and a read handle for the new buffer is returned.
 template<typename T>
-ReadHandle from_buffer(
+ReadHandle from_read_buffer(
   const rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
   const auto * impl = buffer.get_impl();
   if (!impl) {
-    throw CudaError("from_buffer called on buffer with null implementation");
+    throw CudaError("from_read_buffer called on buffer with null implementation");
   }
   if (buffer.size() == 0) {
-    throw CudaError("from_buffer called on empty buffer");
+    throw CudaError("from_read_buffer called on empty buffer");
   }
   const auto * cuda_impl = dynamic_cast<const CudaBufferImpl<T> *>(impl);
   if (cuda_impl) {
@@ -115,7 +117,7 @@ ReadHandle from_buffer(
   }
 
   size_t byte_count = buffer.size() * sizeof(T);
-  auto promoted = detail::allocate_cuda_buffer(byte_count);
+  auto promoted = detail::allocate_cuda_buffer_shared(byte_count);
   auto * promoted_impl = detail::cuda_impl_of(*promoted);
   {
     auto wh = promoted_impl->get_cuda_buffer().get_write_handle(stream);

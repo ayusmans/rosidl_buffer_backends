@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(torch_tensor_msgs)
+project(tensor_msgs)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)

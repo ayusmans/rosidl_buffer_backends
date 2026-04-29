@@ -110,8 +110,8 @@ get_import_cache()
 
 static std::mutex & get_import_cache_mutex()
 {
-  static std::mutex mtx;
-  return mtx;
+  static auto * mtx = new std::mutex();
+  return *mtx;
 }
 
 CachedImport::~CachedImport()

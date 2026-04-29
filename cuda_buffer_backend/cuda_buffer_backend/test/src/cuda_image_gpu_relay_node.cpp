@@ -69,8 +69,8 @@ private:
 
     size_t byte_size = msg->data.size();
 
-    sensor_msgs::msg::Image out =
-      cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(byte_size);
+    sensor_msgs::msg::Image out;
+    out.data = cuda_buffer_backend::allocate_buffer(byte_size);
     out.header = msg->header;
     out.height = msg->height;
     out.width = msg->width;
@@ -82,9 +82,9 @@ private:
     {
       const rosidl::Buffer<uint8_t> & src = msg->data;
       cuda_buffer_backend::ReadHandle rh =
-        cuda_buffer_backend::from_buffer(src, stream_);
+        cuda_buffer_backend::from_read_buffer(src, stream_);
       cuda_buffer_backend::WriteHandle wh =
-        cuda_buffer_backend::from_buffer(out.data, stream_);
+        cuda_buffer_backend::from_write_buffer(out.data, stream_);
       cudaMemcpyAsync(wh.get_ptr(), rh.get_ptr(), byte_size,
         cudaMemcpyDeviceToDevice, stream_);
     }

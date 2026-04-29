@@ -22,8 +22,8 @@
 #include "rclcpp_components/register_node_macro.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/u_int32.hpp"
-#include "torch_tensor_api/torch_tensor_api.hpp"
-#include "torch_tensor_msgs/msg/tensor.hpp"
+#include "torch_conversions/torch_conversions.hpp"
+#include "tensor_msgs/msg/tensor.hpp"
 
 class TorchTensorSubscriber : public rclcpp::Node
 {
@@ -35,7 +35,7 @@ public:
   {
     rclcpp::SubscriptionOptions sub_opts;
     sub_opts.acceptable_buffer_backends = "any";
-    subscription_ = this->create_subscription<torch_tensor_msgs::msg::Tensor>(
+    subscription_ = this->create_subscription<tensor_msgs::msg::Tensor>(
       "test_torch_tensor", 10,
       std::bind(&TorchTensorSubscriber::tensor_callback, this, std::placeholders::_1),
       sub_opts);
@@ -49,7 +49,7 @@ public:
   }
 
 private:
-  void tensor_callback(const torch_tensor_msgs::msg::Tensor::SharedPtr msg)
+  void tensor_callback(const tensor_msgs::msg::Tensor::SharedPtr msg)
   {
     received_count_++;
     bool msg_valid = true;
@@ -78,9 +78,9 @@ private:
     const std::string backend_type = msg->data.get_backend_type();
 
     if (msg_valid && !msg->data.empty()) {
-      torch_tensor_api::StreamGuard guard = torch_tensor_api::set_stream();
-      at::Tensor tensor = torch_tensor_api::from_tensor_msg(
-        *static_cast<const torch_tensor_msgs::msg::Tensor *>(msg.get()),
+      torch_conversions::StreamGuard guard = torch_conversions::set_stream();
+      at::Tensor tensor = torch_conversions::from_input_tensor_msg(
+        *static_cast<const tensor_msgs::msg::Tensor *>(msg.get()),
         /*clone=*/true);
 
       at::Tensor cpu_tensor = tensor.contiguous().cpu();
@@ -126,7 +126,7 @@ private:
     }
   }
 
-  rclcpp::Subscription<torch_tensor_msgs::msg::Tensor>::SharedPtr subscription_;
+  rclcpp::Subscription<tensor_msgs::msg::Tensor>::SharedPtr subscription_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr count_publisher_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr validation_publisher_;
   uint32_t received_count_;

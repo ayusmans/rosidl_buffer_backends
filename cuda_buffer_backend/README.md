@@ -30,7 +30,7 @@ colcon test-result --verbose
 
 | Package | Description |
 |---|---|
-| `cuda_buffer` | Core CUDA buffer implementation: memory pool, IPC manager, host endpoint manager, and user-facing `allocate_msg`/`from_buffer`/`to_buffer` APIs |
+| `cuda_buffer` | Core CUDA buffer implementation: memory pool, IPC manager, host endpoint manager, and user-facing `allocate_buffer`/`from_read_buffer` / `from_write_buffer`/`to_buffer` APIs |
 | `cuda_buffer_backend` | Plugin registration via `pluginlib`, endpoint discovery, and descriptor serialization |
 | `cuda_buffer_backend_msgs` | ROS 2 message definition for `CudaBufferDescriptor` |
 
@@ -45,7 +45,7 @@ colcon test-result --verbose
 const size_t data_size = 640 * 480 * 3;
 
 sensor_msgs::msg::Image msg =
-  cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(data_size);
+  cuda_buffer_backend::allocate_buffer(data_size);
 msg.height = 480;
 msg.width = 640;
 msg.encoding = "rgb8";
@@ -62,12 +62,12 @@ publisher->publish(msg);
 ### Publisher (copy from existing pointer)
 
 Use `to_buffer` to copy bytes from an existing pointer (host or device) into
-a buffer that was already allocated (e.g. via `allocate_msg`). `to_buffer`
+a buffer that was already allocated (e.g. via `allocate_buffer`). `to_buffer`
 is a plain memcpy-through-a-WriteHandle and does **not** allocate.
 
 ```cpp
 sensor_msgs::msg::Image msg =
-  cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(data_size);
+  cuda_buffer_backend::allocate_buffer(data_size);
 msg.height = 480;
 msg.width = 640;
 msg.encoding = "rgb8";
@@ -105,9 +105,9 @@ void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
 
 ### Auto-promoting non-CUDA buffers
 
-`from_buffer` accept any `rosidl::Buffer<T>`, not just
+`from_read_buffer` / `from_write_buffer` accept any `rosidl::Buffer<T>`, not just
 CUDA-backed ones. If the source is a non-CUDA buffer (e.g. the CPU fallback
-path), `from_buffer` allocates a new CUDA-backed `rosidl::Buffer<uint8_t>`
+path), `from_read_buffer` / `from_write_buffer` allocates a new CUDA-backed `rosidl::Buffer<uint8_t>`
 and returns a handle for it.
 
 ```cpp
@@ -122,9 +122,9 @@ void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
 }
 ```
 
-### `from_buffer` handle rules
+### `from_read_buffer` / `from_write_buffer` handle rules
 
-`from_buffer` returns a **WriteHandle** when called with a non-const buffer, or a
+`from_read_buffer` / `from_write_buffer` returns a **WriteHandle** when called with a non-const buffer, or a
 **ReadHandle** when called with a const buffer. The overload is selected at compile
 time based on const-ness of the reference:
 

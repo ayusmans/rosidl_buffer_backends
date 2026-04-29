@@ -51,6 +51,5 @@ uint64   byte_offset
 
 # Underlying storage. May be larger than `prod(shape) * dtype_bits * dtype_lanes / 8`
 # if the message carries a view into a larger allocation.
-# Whichever buffer backend is registered (cuda_buffer_backend for GPU
-# zero-copy, CPU fallback otherwise) owns the bytes.
+# Whichever buffer backend is registered owns the bytes.
 uint8[] data

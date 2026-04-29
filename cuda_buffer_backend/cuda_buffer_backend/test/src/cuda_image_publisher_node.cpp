@@ -74,8 +74,8 @@ private:
 
     const size_t data_size = image_width_ * image_height_ * 3;
 
-    sensor_msgs::msg::Image msg =
-      cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(data_size);
+    sensor_msgs::msg::Image msg;
+    msg.data = cuda_buffer_backend::allocate_buffer(data_size);
     msg.header.stamp = this->now();
     msg.header.frame_id = "cuda_test_frame";
     msg.height = image_height_;
@@ -86,7 +86,7 @@ private:
 
     {
       cuda_buffer_backend::WriteHandle write_handle =
-        cuda_buffer_backend::from_buffer(msg.data, stream_);
+        cuda_buffer_backend::from_write_buffer(msg.data, stream_);
       cudaMemsetAsync(write_handle.get_ptr(), static_cast<int>(count_ % 256),
         data_size, stream_);
     }

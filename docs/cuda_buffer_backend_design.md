@@ -19,7 +19,7 @@ flowchart LR
   Pub["Publisher node"]
   Sub["Subscriber node"]
 
-  Pub -->|"allocate_msg + from_buffer"| Buffer["rosidl::Buffer&lt;uint8_t&gt;"]
+  Pub -->|"allocate_buffer + from_write_buffer"| Buffer["rosidl::Buffer&lt;uint8_t&gt;"]
   Buffer -->|"backend = 'cuda'"| Plugin[cuda_buffer_backend plugin]
   Plugin -->|"create_descriptor"| Descriptor["CudaBufferDescriptor<br/>(pid, block_id, socket, uid, event_handle)"]
   Descriptor -->|"published over RMW"| Sub

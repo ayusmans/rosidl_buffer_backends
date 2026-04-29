@@ -17,20 +17,21 @@
 
 #include <vector>
 
-#include "torch_tensor_api/torch_tensor_api.hpp"
+#include "torch_conversions/torch_conversions.hpp"
 
-using torch_tensor_api::TensorMsg;
-using torch_tensor_api::allocate_tensor;
-using torch_tensor_api::from_tensor_msg;
-using torch_tensor_api::to_tensor_msg;
+using torch_conversions::TensorMsg;
+using torch_conversions::allocate_tensor_msg;
+using torch_conversions::from_input_tensor_msg;
+using torch_conversions::from_output_tensor_msg;
+using torch_conversions::to_tensor_msg;
 
 // Note: kDLCPU, kDLUInt, kDLInt, kDLFloat are enumerators of DLDataTypeCode /
 // DLDeviceType declared at global scope by <ATen/dlpack.h> (transitively
-// included by torch_tensor_api.hpp), so they are already visible here.
+// included by torch_conversions.hpp), so they are already visible here.
 
 TEST(TorchTensorBridge, AllocateCpuTensorPopulatesDlpackMetadata)
 {
-  TensorMsg msg = allocate_tensor({2, 3, 4}, at::kFloat, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({2, 3, 4}, at::kFloat, c10::kCPU);
 
   ASSERT_EQ(msg.shape.size(), 3u);
   EXPECT_EQ(msg.shape[0], 2);
@@ -56,7 +57,7 @@ TEST(TorchTensorBridge, AllocateCpuTensorPopulatesDlpackMetadata)
 
 TEST(TorchTensorBridge, ByteDtypeRoundTripsThroughDlpackTriple)
 {
-  TensorMsg msg = allocate_tensor({5}, at::kByte, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({5}, at::kByte, c10::kCPU);
   EXPECT_EQ(msg.dtype_code, static_cast<uint8_t>(kDLUInt));
   EXPECT_EQ(msg.dtype_bits, 8u);
   EXPECT_EQ(msg.dtype_lanes, 1u);
@@ -64,24 +65,24 @@ TEST(TorchTensorBridge, ByteDtypeRoundTripsThroughDlpackTriple)
 
 TEST(TorchTensorBridge, Int32DtypeRoundTripsThroughDlpackTriple)
 {
-  TensorMsg msg = allocate_tensor({4}, at::kInt, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({4}, at::kInt, c10::kCPU);
   EXPECT_EQ(msg.dtype_code, static_cast<uint8_t>(kDLInt));
   EXPECT_EQ(msg.dtype_bits, 32u);
 }
 
 TEST(TorchTensorBridge, WriteThenReadRoundTrip)
 {
-  TensorMsg msg = allocate_tensor({4}, at::kInt, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({4}, at::kInt, c10::kCPU);
 
   {
-    at::Tensor t = from_tensor_msg(msg);
+    at::Tensor t = from_output_tensor_msg(msg);
     ASSERT_TRUE(t.defined());
     EXPECT_EQ(t.sizes(), (std::vector<int64_t>{4}));
     EXPECT_EQ(t.scalar_type(), at::kInt);
     t.copy_(torch::tensor({10, 20, 30, 40}, at::kInt));
   }
 
-  at::Tensor v = from_tensor_msg(
+  at::Tensor v = from_input_tensor_msg(
     const_cast<const TensorMsg &>(msg), /*clone=*/false);
   ASSERT_TRUE(v.defined());
   ASSERT_EQ(v.numel(), 4);
@@ -94,7 +95,7 @@ TEST(TorchTensorBridge, WriteThenReadRoundTrip)
 
 TEST(TorchTensorBridge, ToTensorMsgCopiesAndUpdatesMetadata)
 {
-  TensorMsg msg = allocate_tensor({16}, at::kFloat, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({16}, at::kFloat, c10::kCPU);
 
   at::Tensor src = torch::arange(0, 6, at::kFloat).reshape({2, 3});
   to_tensor_msg(msg, src);
@@ -106,7 +107,7 @@ TEST(TorchTensorBridge, ToTensorMsgCopiesAndUpdatesMetadata)
   EXPECT_EQ(msg.dtype_bits, 32u);
   EXPECT_EQ(msg.byte_offset, 0u);
 
-  at::Tensor round = from_tensor_msg(
+  at::Tensor round = from_input_tensor_msg(
     const_cast<const TensorMsg &>(msg), /*clone=*/true);
   ASSERT_EQ(round.numel(), 6);
   EXPECT_TRUE(torch::equal(round.flatten(), src.flatten()));
@@ -115,9 +116,9 @@ TEST(TorchTensorBridge, ToTensorMsgCopiesAndUpdatesMetadata)
 TEST(TorchTensorBridge, ByteOffsetSelectsSubregionOfStorage)
 {
   // Allocate 16 ints but publish only a 4-int view starting at index 4.
-  TensorMsg msg = allocate_tensor({16}, at::kInt, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({16}, at::kInt, c10::kCPU);
   {
-    at::Tensor full = from_tensor_msg(msg);
+    at::Tensor full = from_output_tensor_msg(msg);
     for (int i = 0; i < 16; ++i) {
       full.index_put_({i}, i * 100);
     }
@@ -127,7 +128,7 @@ TEST(TorchTensorBridge, ByteOffsetSelectsSubregionOfStorage)
   msg.strides = {1};
   msg.byte_offset = 4 * sizeof(int32_t);
 
-  at::Tensor view = from_tensor_msg(
+  at::Tensor view = from_input_tensor_msg(
     const_cast<const TensorMsg &>(msg), /*clone=*/false);
   ASSERT_EQ(view.numel(), 4);
   auto * p = view.data_ptr<int32_t>();
@@ -139,7 +140,7 @@ TEST(TorchTensorBridge, ByteOffsetSelectsSubregionOfStorage)
 
 TEST(TorchTensorBridge, ToTensorMsgRejectsOversizedTensor)
 {
-  TensorMsg msg = allocate_tensor({4}, at::kByte, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({4}, at::kByte, c10::kCPU);
   at::Tensor big = torch::zeros({128}, at::kByte);
   EXPECT_THROW(to_tensor_msg(msg, big), std::runtime_error);
 }
@@ -147,27 +148,27 @@ TEST(TorchTensorBridge, ToTensorMsgRejectsOversizedTensor)
 TEST(TorchTensorBridge, EmptyDataReturnsUndefinedTensor)
 {
   TensorMsg msg;
-  EXPECT_FALSE(from_tensor_msg(const_cast<const TensorMsg &>(msg)).defined());
-  EXPECT_FALSE(from_tensor_msg(msg).defined());
+  EXPECT_FALSE(from_input_tensor_msg(const_cast<const TensorMsg &>(msg)).defined());
+  EXPECT_FALSE(from_output_tensor_msg(msg).defined());
 }
 
 TEST(TorchTensorBridge, DtypeConversionRejectsUnsupportedTriple)
 {
-  using torch_tensor_api::DLDataType;
-  using torch_tensor_api::scalar_from_dl_dtype;
+  using torch_conversions::detail::DLDataType;
+  using torch_conversions::detail::scalar_from_dl_dtype;
   EXPECT_THROW(scalar_from_dl_dtype(DLDataType{kDLFloat, 128, 1}), std::runtime_error);
   EXPECT_THROW(scalar_from_dl_dtype(DLDataType{kDLFloat, 32, 4}), std::runtime_error);
 }
 
 TEST(TorchTensorBridge, MakeDlpackReadPopulatesDlTensorFields)
 {
-  TensorMsg msg = allocate_tensor({2, 3}, at::kFloat, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({2, 3}, at::kFloat, c10::kCPU);
   {
-    at::Tensor t = torch_tensor_api::from_tensor_msg(msg);
+    at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
     t.copy_(torch::arange(0, 6, at::kFloat).reshape({2, 3}));
   }
 
-  auto * dlm = torch_tensor_api::make_dlpack_read(msg);
+  auto * dlm = torch_conversions::detail::make_dlpack_read(msg);
   ASSERT_NE(dlm, nullptr);
   ASSERT_NE(dlm->deleter, nullptr);
 
@@ -194,9 +195,9 @@ TEST(TorchTensorBridge, MakeDlpackReadPopulatesDlTensorFields)
 
 TEST(TorchTensorBridge, MakeDlpackReadWithByteOffset)
 {
-  TensorMsg msg = allocate_tensor({16}, at::kInt, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({16}, at::kInt, c10::kCPU);
   {
-    at::Tensor full = torch_tensor_api::from_tensor_msg(msg);
+    at::Tensor full = torch_conversions::from_output_tensor_msg(msg);
     for (int i = 0; i < 16; ++i) {
       full.index_put_({i}, i * 100);
     }
@@ -209,7 +210,7 @@ TEST(TorchTensorBridge, MakeDlpackReadWithByteOffset)
   msg.strides = {1};
   msg.byte_offset = 4 * sizeof(int32_t);
 
-  auto * dlm = torch_tensor_api::make_dlpack_read(msg);
+  auto * dlm = torch_conversions::detail::make_dlpack_read(msg);
   ASSERT_NE(dlm, nullptr);
   EXPECT_EQ(dlm->dl_tensor.ndim, 1);
   EXPECT_EQ(dlm->dl_tensor.shape[0], 4);
@@ -226,15 +227,15 @@ TEST(TorchTensorBridge, MakeDlpackReadWithByteOffset)
 
 TEST(TorchTensorBridge, ToDlpackDispatchesOnConstness)
 {
-  TensorMsg msg = allocate_tensor({4}, at::kFloat, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({4}, at::kFloat, c10::kCPU);
 
-  auto * writable = torch_tensor_api::to_dlpack(msg);
+  auto * writable = torch_conversions::detail::to_dlpack(msg);
   ASSERT_NE(writable, nullptr);
   EXPECT_EQ(writable->dl_tensor.ndim, 1);
   EXPECT_EQ(writable->dl_tensor.shape[0], 4);
   writable->deleter(writable);
 
-  auto * readable = torch_tensor_api::to_dlpack(
+  auto * readable = torch_conversions::detail::to_dlpack(
     const_cast<const TensorMsg &>(msg));
   ASSERT_NE(readable, nullptr);
   EXPECT_EQ(readable->dl_tensor.shape[0], 4);
@@ -243,10 +244,10 @@ TEST(TorchTensorBridge, ToDlpackDispatchesOnConstness)
 
 TEST(TorchTensorBridge, ToDlpackOwnedFreesOnScopeExit)
 {
-  TensorMsg msg = allocate_tensor({3}, at::kInt, c10::kCPU);
+  TensorMsg msg = allocate_tensor_msg({3}, at::kInt, c10::kCPU);
 
   {
-    auto holder = torch_tensor_api::to_dlpack_owned(
+    auto holder = torch_conversions::detail::to_dlpack_owned(
       const_cast<const TensorMsg &>(msg));
     ASSERT_TRUE(holder);
     EXPECT_EQ(holder->dl_tensor.ndim, 1);
@@ -255,7 +256,7 @@ TEST(TorchTensorBridge, ToDlpackOwnedFreesOnScopeExit)
 
   // A second one, this time handed off via release() (simulating a
   // framework's from_dlpack taking ownership).
-  auto holder2 = torch_tensor_api::to_dlpack_owned(
+  auto holder2 = torch_conversions::detail::to_dlpack_owned(
     const_cast<const TensorMsg &>(msg));
   DLManagedTensor * raw = holder2.release();
   ASSERT_NE(raw, nullptr);

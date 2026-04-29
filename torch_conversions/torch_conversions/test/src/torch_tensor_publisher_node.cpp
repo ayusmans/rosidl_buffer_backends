@@ -19,8 +19,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "std_msgs/msg/u_int32.hpp"
-#include "torch_tensor_api/torch_tensor_api.hpp"
-#include "torch_tensor_msgs/msg/tensor.hpp"
+#include "torch_conversions/torch_conversions.hpp"
+#include "tensor_msgs/msg/tensor.hpp"
 
 class TorchTensorPublisher : public rclcpp::Node
 {
@@ -38,7 +38,7 @@ public:
     tensor_width_ = this->get_parameter("tensor_width").as_int();
     tensor_height_ = this->get_parameter("tensor_height").as_int();
 
-    publisher_ = this->create_publisher<torch_tensor_msgs::msg::Tensor>(
+    publisher_ = this->create_publisher<tensor_msgs::msg::Tensor>(
       "test_torch_tensor", 10);
     count_publisher_ = this->create_publisher<std_msgs::msg::UInt32>(
       "publisher_count", 10);
@@ -61,13 +61,13 @@ private:
       return;
     }
 
-    torch_tensor_api::StreamGuard guard = torch_tensor_api::set_stream();
+    torch_conversions::StreamGuard guard = torch_conversions::set_stream();
 
-    torch_tensor_msgs::msg::Tensor msg = torch_tensor_api::allocate_tensor(
+    tensor_msgs::msg::Tensor msg = torch_conversions::allocate_tensor_msg(
       {tensor_height_, tensor_width_, 3}, torch::kByte);
 
     {
-      at::Tensor output = torch_tensor_api::from_tensor_msg(msg);
+      at::Tensor output = torch_conversions::from_output_tensor_msg(msg);
       output.fill_(static_cast<int>(count_ % 256));
     }
 
@@ -85,7 +85,7 @@ private:
     }
   }
 
-  rclcpp::Publisher<torch_tensor_msgs::msg::Tensor>::SharedPtr publisher_;
+  rclcpp::Publisher<tensor_msgs::msg::Tensor>::SharedPtr publisher_;
   rclcpp::Publisher<std_msgs::msg::UInt32>::SharedPtr count_publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
   size_t count_;

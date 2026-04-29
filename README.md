@@ -1,8 +1,8 @@
 # rosidl_buffer_backends
 
-CUDA and PyTorch buffer backend implementations for `rosidl::Buffer`,
-enabling zero-copy GPU memory sharing between ROS 2 publishers and
-subscribers.
+CUDA buffer backend implementation for `rosidl::Buffer`, enabling zero-copy
+GPU memory sharing between ROS 2 publishers and subscribers, plus a
+PyTorch-side helper library that builds on the same buffer infrastructure.
 
 ## Packages
 
@@ -13,11 +13,13 @@ subscribers.
   descriptors.
 - **libtorch_vendor** -- Vendor package that downloads and installs the
   pre-built LibTorch C++ distribution.
-- **torch_buffer** -- Device-agnostic PyTorch buffer library wrapping device
-  backends with tensor metadata (shape, strides, dtype).
-- **torch_buffer_backend** -- BufferBackend plugin for PyTorch tensors.
-- **torch_buffer_backend_msgs** -- ROS 2 message definitions for Torch buffer
-  descriptors.
+- **tensor_msgs** -- DLPack-aligned `Tensor.msg` definition.
+- **torch_conversions** -- Header-only helper library that converts between
+  `tensor_msgs/Tensor` and `at::Tensor` and exposes DLPack import /
+  export. Replaces the older `torch_buffer_backend` plugin approach with a
+  plain message + bridge library that rides on top of whichever
+  `rosidl::Buffer` backend is registered (CUDA when available, CPU
+  otherwise).
 
 ## Prerequisites
 
@@ -29,11 +31,10 @@ subscribers.
 - LibTorch: provided automatically by `libtorch_vendor` at build time if a
   system LibTorch isn't already visible.
 
-Per-package build, test, and run details live in each backend's README:
+Per-package build, test, and run details live in each package's README:
 
 - [`cuda_buffer_backend/README.md`](cuda_buffer_backend/README.md)
-- [`torch_buffer_backend/README.md`](torch_buffer_backend/README.md)
-- Demo: [`../rosidl_buffer_backends_tutorials/README.md`](../rosidl_buffer_backends_tutorials/README.md)
+- [`torch_conversions/README.md`](torch_conversions/README.md)
 
 ## API overview
 
@@ -43,7 +44,7 @@ Per-package build, test, and run details live in each backend's README:
 #include "cuda_buffer/cuda_buffer_api.hpp"
 
 // Publisher: allocate + write directly via kernel.
-auto msg = cuda_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(byte_count);
+auto msg = cuda_buffer_backend::allocate_buffer(byte_count);
 {
   auto wh = cuda_buffer_backend::from_buffer(msg.data, stream);
   my_kernel<<<...>>>(wh.get_ptr(), ...);
@@ -67,26 +68,28 @@ auto rh_any = cuda_buffer_backend::from_buffer(cpu_or_other_buf, stream);
 std::shared_ptr<rosidl::Buffer<uint8_t>> promoted = rh_any.get_promoted_buffer();
 ```
 
-### Torch buffer backend (`torch_buffer_backend`)
+### Torch tensor API (`torch_conversions`)
 
 ```cpp
-#include "torch_buffer/torch_buffer_api.hpp"
+#include "torch_conversions/torch_conversions.hpp"
+#include "tensor_msgs/msg/tensor.hpp"
 
-// Publisher: allocate + copy a tensor into the message.
-auto msg = torch_buffer_backend::allocate_msg<sensor_msgs::msg::Image>(
-  {H, W, C}, torch::kByte);
-torch_buffer_backend::to_buffer(msg.data, tensor);
+// Publisher: allocate a Tensor message (CUDA-backed if available).
+auto msg = torch_conversions::allocate_tensor_msg(
+  /*shape=*/{1080, 1920, 3}, torch::kUInt8, torch::kCUDA);
 
-// Subscriber: safe default returns an independent clone.
-at::Tensor t = torch_buffer_backend::from_buffer(msg->data);
+// Wrap as at::Tensor without copying and write into it.
+at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
+my_pipeline(t);
 
-// Subscriber: zero-copy view when the caller is certain it will not mutate
-// the tensor in place. Caller must treat the returned tensor as read-only.
-at::Tensor view = torch_buffer_backend::from_buffer(msg->data, /*clone=*/false);
+// Subscriber: same call returns an at::Tensor view of the received message.
+at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
 ```
 
-The torch backend does not cross-device-promote: the returned tensor stays
-on the same device as the underlying torch buffer (CUDA or CPU).
+The message schema is a field-for-field transcription of DLPack's
+`DLTensor`, so any DLPack-compatible framework (PyTorch, TensorFlow, JAX,
+CuPy, ONNX Runtime, ...) can interoperate over the wire by converting to /
+from its own DLPack representation.
 
 ## License
 
