@@ -3,8 +3,8 @@
 <package format="3">
   <name>cuda_buffer_backend</name>
   <version>0.0.0</version>
-  <description>CUDA buffer backend plugin for ROS 2 Buffer backend system.
-  Enables zero-copy GPU memory sharing between publishers and subscribers.</description>
+  <description>Pluginlib backend for CUDA-backed rosidl::Buffer transport,
+  using CUDA IPC when available and CPU fallback otherwise.</description>
 
   <maintainer email="yuankunz@nvidia.com">Yuankun Zhu</maintainer>
   <license>Apache-2.0</license>

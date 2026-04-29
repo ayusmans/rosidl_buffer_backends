@@ -4,7 +4,7 @@
   <name>libtorch_vendor</name>
   <version>0.0.0</version>
   <description>Vendor package that downloads and installs the pre-built
-  LibTorch C++ distribution for use by torch_buffer and other packages.</description>
+  LibTorch C++ distribution for torch_conversions and other packages.</description>
 
   <maintainer email="yuankunz@nvidia.com">Yuankun Zhu</maintainer>
   <license>Apache-2.0</license>

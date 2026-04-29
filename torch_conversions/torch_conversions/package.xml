@@ -4,7 +4,7 @@
   <name>torch_conversions</name>
   <version>0.0.0</version>
   <description>Header-only helper library that converts between a
-  tensor_msgs/ExperimentalTensor message and an at::Tensor backed by rosidl::Buffer backend.</description>
+  tensor_msgs/ExperimentalTensor message and an at::Tensor backed by rosidl::Buffer storage.</description>
 
   <maintainer email="yuankunz@nvidia.com">Yuankun Zhu</maintainer>
   <license>Apache-2.0</license>

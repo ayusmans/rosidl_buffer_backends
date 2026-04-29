@@ -157,7 +157,7 @@ TEST(TorchTensorBridge, DtypeConversionRejectsUnsupportedTriple)
   EXPECT_THROW(scalar_from_dl_dtype(DLDataType{kDLFloat, 32, 4}), std::runtime_error);
 }
 
-TEST(TorchTensorBridge, MakeDlpackReadPopulatesDlTensorFields)
+TEST(TorchTensorBridge, MakeInputDlpackPopulatesDlTensorFields)
 {
   TensorMsg msg = allocate_tensor_msg({2, 3}, at::kFloat, c10::kCPU);
   {
@@ -165,7 +165,7 @@ TEST(TorchTensorBridge, MakeDlpackReadPopulatesDlTensorFields)
     t.copy_(torch::arange(0, 6, at::kFloat).reshape({2, 3}));
   }
 
-  auto * dlm = torch_conversions::detail::make_dlpack_read(msg);
+  auto * dlm = torch_conversions::detail::make_input_dlpack(msg);
   ASSERT_NE(dlm, nullptr);
   ASSERT_NE(dlm->deleter, nullptr);
 
@@ -190,7 +190,7 @@ TEST(TorchTensorBridge, MakeDlpackReadPopulatesDlTensorFields)
   dlm->deleter(dlm);
 }
 
-TEST(TorchTensorBridge, MakeDlpackReadWithByteOffset)
+TEST(TorchTensorBridge, MakeInputDlpackWithByteOffset)
 {
   TensorMsg msg = allocate_tensor_msg({16}, at::kInt, c10::kCPU);
   {
@@ -207,7 +207,7 @@ TEST(TorchTensorBridge, MakeDlpackReadWithByteOffset)
   msg.strides = {1};
   msg.byte_offset = 4 * sizeof(int32_t);
 
-  auto * dlm = torch_conversions::detail::make_dlpack_read(msg);
+  auto * dlm = torch_conversions::detail::make_input_dlpack(msg);
   ASSERT_NE(dlm, nullptr);
   EXPECT_EQ(dlm->dl_tensor.ndim, 1);
   EXPECT_EQ(dlm->dl_tensor.shape[0], 4);
@@ -222,30 +222,13 @@ TEST(TorchTensorBridge, MakeDlpackReadWithByteOffset)
   dlm->deleter(dlm);
 }
 
-TEST(TorchTensorBridge, ToDlpackDispatchesOnConstness)
-{
-  TensorMsg msg = allocate_tensor_msg({4}, at::kFloat, c10::kCPU);
-
-  auto * writable = torch_conversions::detail::to_dlpack(msg);
-  ASSERT_NE(writable, nullptr);
-  EXPECT_EQ(writable->dl_tensor.ndim, 1);
-  EXPECT_EQ(writable->dl_tensor.shape[0], 4);
-  writable->deleter(writable);
-
-  auto * readable = torch_conversions::detail::to_dlpack(
-    const_cast<const TensorMsg &>(msg));
-  ASSERT_NE(readable, nullptr);
-  EXPECT_EQ(readable->dl_tensor.shape[0], 4);
-  readable->deleter(readable);
-}
-
-TEST(TorchTensorBridge, ToDlpackOwnedFreesOnScopeExit)
+TEST(TorchTensorBridge, DlpackPtrFreesOnScopeExit)
 {
   TensorMsg msg = allocate_tensor_msg({3}, at::kInt, c10::kCPU);
 
   {
-    auto holder = torch_conversions::detail::to_dlpack_owned(
-      const_cast<const TensorMsg &>(msg));
+    torch_conversions::detail::DlpackPtr holder{
+      torch_conversions::detail::make_input_dlpack(const_cast<const TensorMsg &>(msg))};
     ASSERT_TRUE(holder);
     EXPECT_EQ(holder->dl_tensor.ndim, 1);
     EXPECT_EQ(holder->dl_tensor.shape[0], 3);
@@ -253,8 +236,8 @@ TEST(TorchTensorBridge, ToDlpackOwnedFreesOnScopeExit)
 
   // A second one, this time handed off via release() (simulating a
   // framework's from_dlpack taking ownership).
-  auto holder2 = torch_conversions::detail::to_dlpack_owned(
-    const_cast<const TensorMsg &>(msg));
+  torch_conversions::detail::DlpackPtr holder2{
+    torch_conversions::detail::make_input_dlpack(const_cast<const TensorMsg &>(msg))};
   DLManagedTensor * raw = holder2.release();
   ASSERT_NE(raw, nullptr);
   raw->deleter(raw);  // caller takes over ownership

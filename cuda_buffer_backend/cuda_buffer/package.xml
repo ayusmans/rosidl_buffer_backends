@@ -3,9 +3,9 @@
 <package format="3">
   <name>cuda_buffer</name>
   <version>0.0.0</version>
-  <description>CUDA buffer implementation (CudaBuffer, CudaBufferImpl, CUDAMemoryPool, IPC)
-  for the ROS 2 Buffer backend system. Contains both headers and compiled sources
-  for IPC manager and host endpoint manager.</description>
+  <description>CUDA-backed rosidl::Buffer storage and synchronization utilities,
+  including memory pooling, CUDA IPC support, and same-host endpoint locality
+  discovery for rosidl::Buffer backends.</description>
 
   <maintainer email="yuankunz@nvidia.com">Yuankun Zhu</maintainer>
   <license>Apache-2.0</license>
