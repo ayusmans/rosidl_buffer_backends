@@ -44,27 +44,30 @@ Per-package build, test, and run details live in each package's README:
 #include "cuda_buffer/cuda_buffer_api.hpp"
 
 // Publisher: allocate + write directly via kernel.
-auto msg = cuda_buffer_backend::allocate_buffer(byte_count);
+sensor_msgs::msg::Image msg;
+msg.data = cuda_buffer_backend::allocate_buffer(byte_count);
 {
-  auto wh = cuda_buffer_backend::from_buffer(msg.data, stream);
-  my_kernel<<<...>>>(wh.get_ptr(), ...);
+  auto wh = cuda_buffer_backend::from_write_buffer(msg.data, stream);
+  my_kernel<<<...>>>(wh.get_ptr(), ...);  // wh.get_ptr() returns uint8_t *
 }  // wh destructor records the write event on `stream`
 
 // Publisher: copy from an existing host/device pointer into a pre-allocated buffer.
 {
-  auto wh = cuda_buffer_backend::from_buffer(msg.data, stream);
+  auto wh = cuda_buffer_backend::from_write_buffer(msg.data, stream);
   cuda_buffer_backend::to_buffer(host_ptr, byte_count, wh, stream,
     cudaMemcpyHostToDevice);
 }
 
 // Subscriber: read handle (waits on publisher's write event).
-auto rh = cuda_buffer_backend::from_buffer(msg->data, stream);
-use_data<<<...>>>(rh.get_ptr(), ...);
+// from_read_buffer takes `const Buffer &` and accepts both const and mutable
+// arguments; no `const Buffer & data = ...` alias is needed.
+auto rh = cuda_buffer_backend::from_read_buffer(msg->data, stream);
+use_data<<<...>>>(rh.get_ptr(), ...);  // rh.get_ptr() returns const uint8_t *
 
 // Auto-promotion: passing a non-CUDA buffer allocates a fresh CUDA buffer
 // and (for reads) copies H2D; the handle owns the new buffer via
 // get_promoted_buffer().
-auto rh_any = cuda_buffer_backend::from_buffer(cpu_or_other_buf, stream);
+auto rh_any = cuda_buffer_backend::from_read_buffer(cpu_or_other_buf, stream);
 std::shared_ptr<rosidl::Buffer<uint8_t>> promoted = rh_any.get_promoted_buffer();
 ```
 
@@ -79,11 +82,11 @@ auto msg = torch_conversions::allocate_tensor_msg(
   /*shape=*/{1080, 1920, 3}, torch::kUInt8, torch::kCUDA);
 
 // Wrap as at::Tensor without copying and write into it.
-at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
-my_pipeline(t);
+at::Tensor t_out = torch_conversions::from_output_tensor_msg(msg);
+my_pipeline(t_out);
 
-// Subscriber: same call returns an at::Tensor view of the received message.
-at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
+// Subscriber: zero-copy read view of the received message.
+at::Tensor t_in = torch_conversions::from_input_tensor_msg(msg);
 ```
 
 The message schema is a field-for-field transcription of DLPack's
