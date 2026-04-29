@@ -20,10 +20,9 @@ and interoperate over the wire without re-encoding shape / dtype metadata.
 | `tensor_msgs` | `ExperimentalTensor.msg` definition: DLPack-aligned `{dtype_code, dtype_bits, dtype_lanes}`, `shape[]`, `strides[]`, `byte_offset`, `data[]`. |
 | `torch_conversions` | Header-only library: allocation, `at::Tensor` ↔ `ExperimentalTensor.msg` conversion, DLPack export, and CUDA stream helpers. |
 
-There is no pluginlib plugin, no `BufferImplBase` subclass, and no custom
-descriptor. The `uint8[] data` field maps to `rosidl::Buffer<uint8_t>`,
-which transparently uses `cuda_buffer_backend` for GPU zero-copy when
-both peers support it and falls back to CPU CDR otherwise.
+The `uint8[] data` field maps to `rosidl::Buffer<uint8_t>`,
+so storage and transport are delegated to whichever buffer backend is
+registered for the connection.
 
 ## The `ExperimentalTensor.msg` schema
 
@@ -43,9 +42,7 @@ uint8[] data
 ```
 
 The message carries DLPack's dtype / shape / stride / offset metadata. The
-`DLDevice` fields are derived from the underlying `msg.data` buffer backend
-when exporting to DLPack (`cpu` -> `kDLCPU`, `cuda` -> `kDLCUDA` plus the
-pointer's CUDA device).
+`DLDevice` fields are derived from the underlying `msg.data` buffer backend.
 
 ## Build
 
@@ -58,62 +55,12 @@ colcon build --symlink-install --packages-up-to torch_conversions
 source install/setup.sh
 ```
 
-## API reference
+## Testing
 
-All entry points are in namespace `torch_conversions`. `TensorMsg` is a
-type alias for `tensor_msgs::msg::ExperimentalTensor`.
-
-### Allocation
-
-```cpp
-TensorMsg allocate_tensor_msg(
-  const std::vector<int64_t> & shape,
-  at::ScalarType dtype,
-  std::optional<c10::DeviceType> device = std::nullopt);
+```bash
+colcon test --packages-select tensor_msgs torch_conversions
+colcon test-result --verbose
 ```
-
-Returns a `Tensor` message with DLPack metadata populated and `data`
-sized exactly to `prod(shape) * dtype.bytesize` bytes. `byte_offset` is
-0; the buffer is contiguous (`strides` set to row-major).
-
-`device` defaults to CUDA when LibTorch reports CUDA available, otherwise
-CPU. The `data` buffer is a `cuda_buffer_backend::CudaBufferImpl` for
-CUDA messages (zero-copy IPC eligible) and a CPU `rosidl::Buffer` for
-CPU messages.
-
-### `TensorMsg` ↔ `at::Tensor`
-
-```cpp
-// Write path (publisher): aliases msg.data; the tensor is safe to write to.
-// Requires a mutable msg so the write intent is explicit at the call site.
-at::Tensor from_output_tensor_msg(TensorMsg & msg);
-
-// Read path (subscriber): zero-copy view by default; clone=true gives an
-// independent copy. Takes const &, so both const and mutable args are accepted.
-at::Tensor from_input_tensor_msg(const TensorMsg & msg, bool clone = true);
-
-// Copy an at::Tensor's data into a pre-sized TensorMsg and fill all DLPack
-// metadata from the tensor.
-void to_tensor_msg(TensorMsg & msg, const at::Tensor & tensor);
-```
-
-`from_input_tensor_msg` defaults `clone=true` so the subscriber gets an
-independent tensor that is safe to mutate even when the underlying buffer
-is shared via CUDA IPC. Pass `clone=false` when the caller guarantees
-read-only use.
-
-### CUDA stream guard
-
-```cpp
-class StreamGuard;                   // RAII over c10::cuda::CUDAStreamGuard
-StreamGuard set_stream();            // uses c10::cuda::getStreamFromPool()
-```
-
-Wrap the publisher/subscriber callback body in a `StreamGuard` when
-running on CUDA; this routes torch ops onto a non-default stream so the
-event-based handshake in `cuda_buffer_backend` (write_event +
-`cudaStreamWaitEvent`) actually has work to synchronize against. On CPU
-builds the guard is a no-op.
 
 ## Examples
 
@@ -125,14 +72,18 @@ builds the guard is a no-op.
 
 void timer_cb()
 {
+  // Uses a non-default CUDA stream when CUDA is available; no-op on CPU.
   auto guard = torch_conversions::set_stream();
 
+  // Pre-sizes msg.data and fills DLPack shape / dtype metadata.
+  // Uses the accelerated buffer backend when available, otherwise CPU.
   auto msg = torch_conversions::allocate_tensor_msg(
-    {height, width, 3}, torch::kByte);   // CUDA-backed when available
+    {height, width, 3}, torch::kByte);
 
   {
+    // Output path: writable tensor view that aliases msg.data.
     at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
-    render_pipeline(t);                  // runs on the guarded stream
+    render_pipeline(t);
   }
 
   publisher_->publish(msg);
@@ -144,36 +95,32 @@ void timer_cb()
 ```cpp
 void cb(const tensor_msgs::msg::ExperimentalTensor::SharedPtr msg)
 {
+  // Uses the same stream discipline as the publisher side.
   auto guard = torch_conversions::set_stream();
 
   // Default clone=true: independent tensor, safe to mutate.
   at::Tensor in = torch_conversions::from_input_tensor_msg(*msg);
   auto out = model_(in);
 
-  // Or zero-copy view (caller guarantees no in-place writes).
+  // Or clone=false for a zero-copy read-only view.
   at::Tensor view = torch_conversions::from_input_tensor_msg(*msg, /*clone=*/false);
 }
 ```
 
-### Filling metadata from an existing tensor
+### Publishing an existing tensor
 
 ```cpp
-at::Tensor t = compute_something();             // arbitrary at::Tensor
+at::Tensor t = compute_something().contiguous();
 
-tensor_msgs::msg::ExperimentalTensor msg;
-torch_conversions::to_tensor_msg(msg, t);        // copies data, fills shape/strides/dtype/device
+std::vector<int64_t> shape(t.sizes().begin(), t.sizes().end());
+// Pre-allocate storage, then copy the tensor into it and update metadata.
+auto msg = torch_conversions::allocate_tensor_msg(shape, t.scalar_type());
+torch_conversions::to_tensor_msg(msg, t);
 publisher_->publish(msg);
 ```
 
-`to_tensor_msg` copies tensor data into `msg.data` and sets all DLPack
-metadata fields to match `t`.
-
-## Testing
-
-```bash
-colcon test --packages-select tensor_msgs torch_conversions
-colcon test-result --verbose
-```
+`to_tensor_msg` copies tensor data into the pre-sized `msg.data` buffer and
+updates shape / strides / dtype metadata to match `t`.
 
 ## License
 

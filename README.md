@@ -28,8 +28,6 @@ PyTorch-side helper library that builds on the same buffer infrastructure.
   guide for the canonical source-build flow, or use the pixi workflow
   shipped by the [`ros2/ros2`](https://github.com/ros2/ros2) meta-repo.
 - CUDA Toolkit (>= 11.8) on the host.
-- LibTorch: provided automatically by `libtorch_vendor` at build time if a
-  system LibTorch isn't already visible.
 
 Per-package build, test, and run details live in each package's README:
 
@@ -43,32 +41,23 @@ Per-package build, test, and run details live in each package's README:
 ```cpp
 #include "cuda_buffer/cuda_buffer_api.hpp"
 
-// Publisher: allocate + write directly via kernel.
+// Publisher: allocate + write directly to the output buffer.
 sensor_msgs::msg::Image msg;
 msg.data = cuda_buffer_backend::allocate_buffer(byte_count);
 {
   auto wh = cuda_buffer_backend::from_output_buffer(msg.data, stream);
-  my_kernel<<<...>>>(wh.get_ptr(), ...);  // wh.get_ptr() returns uint8_t *
+  uint8_t * out = wh.get_ptr();
+  my_kernel<<<...>>>(out, ...);
 }  // wh destructor records the write event on `stream`
-
-// Publisher: copy from an existing host/device pointer into a pre-allocated buffer.
-{
-  auto wh = cuda_buffer_backend::from_output_buffer(msg.data, stream);
-  cuda_buffer_backend::to_buffer(host_ptr, byte_count, wh, stream,
-    cudaMemcpyHostToDevice);
-}
+publisher->publish(msg);
 
 // Subscriber: input/read handle (waits on publisher's write event).
-// from_input_buffer takes `const Buffer &` and accepts both const and mutable
-// arguments; no `const Buffer & data = ...` alias is needed.
 auto rh = cuda_buffer_backend::from_input_buffer(msg->data, stream);
 use_data<<<...>>>(rh.get_ptr(), ...);  // rh.get_ptr() returns const uint8_t *
 
 // Auto-promotion: passing a non-CUDA buffer allocates a fresh CUDA buffer
-// and (for inputs) copies H2D; the handle owns the new buffer via
-// get_promoted_buffer().
-auto rh_any = cuda_buffer_backend::from_input_buffer(cpu_or_other_buf, stream);
-std::shared_ptr<rosidl::Buffer<uint8_t>> promoted = rh_any.get_promoted_buffer();
+// and (for inputs) copies H2D;
+auto rh = cuda_buffer_backend::from_input_buffer(cpu_or_other_buf, stream);
 ```
 
 ### Torch tensor API (`torch_conversions`)
@@ -77,15 +66,17 @@ std::shared_ptr<rosidl::Buffer<uint8_t>> promoted = rh_any.get_promoted_buffer()
 #include "torch_conversions/torch_conversions.hpp"
 #include "tensor_msgs/msg/experimental_tensor.hpp"
 
-// Publisher: allocate a Tensor message (CUDA-backed if available).
+// Publisher: allocate a Tensor message (accelerated backend when available).
+auto guard = torch_conversions::set_stream();
 auto msg = torch_conversions::allocate_tensor_msg(
-  /*shape=*/{1080, 1920, 3}, torch::kUInt8, torch::kCUDA);
+  /*shape=*/{1080, 1920, 3}, torch::kUInt8);
 
 // Wrap as at::Tensor without copying and write into it.
 at::Tensor t_out = torch_conversions::from_output_tensor_msg(msg);
 my_pipeline(t_out);
 
 // Subscriber: zero-copy read view of the received message.
+auto guard = torch_conversions::set_stream();
 at::Tensor t_in = torch_conversions::from_input_tensor_msg(msg);
 ```
 

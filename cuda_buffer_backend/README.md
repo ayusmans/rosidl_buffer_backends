@@ -51,19 +51,17 @@ msg.width = 640;
 msg.encoding = "rgb8";
 msg.step = 640 * 3;
 
-cuda_buffer_backend::WriteHandle wh =
-  cuda_buffer_backend::from_output_buffer(msg.data, stream);
-my_kernel<<<...>>>(wh.get_ptr(), ...);
+{
+  cuda_buffer_backend::WriteHandle wh =
+    cuda_buffer_backend::from_output_buffer(msg.data, stream);
+  my_kernel<<<...>>>(wh.get_ptr(), ...);
+}  // WriteHandle destructor records the write event on `stream`
 
 publisher->publish(msg);
-// wh destructor records write_event on stream when it goes out of scope
 ```
 
 `allocate_buffer(count)` returns a `rosidl::Buffer<uint8_t>`; the caller
-assigns it to whichever field the message schema uses (`sensor_msgs/Image`
-and most carrier messages use `data`, but descriptor messages use other
-names like `serialized_data` or `device_data`, so the helper deliberately
-doesn't assume).
+assigns it to whichever field the message schema uses.
 
 ### Publisher (copy from existing pointer)
 
@@ -106,7 +104,7 @@ void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
   // rh.get_ptr() returns `const uint8_t *` — the type system enforces read-only access.
 
   my_kernel<<<...>>>(rh.get_ptr(), ...);
-}  // ReadHandle destructor signals publisher that GPU work is complete
+}  // ReadHandle destructor records the read event for buffer lifetime tracking
 ```
 
 ### Auto-promoting non-CUDA buffers
@@ -136,12 +134,9 @@ cuda_buffer_backend::ReadHandle rh =
   finalization) throws `CudaError`. `WriteHandle::get_ptr()` returns
   `uint8_t *`.
 - `from_input_buffer` takes `const rosidl::Buffer<T> &`; it accepts both
-  const and mutable arguments (const-ref binding), so you don't need a
-  `const Buffer & data = msg->data` alias. `ReadHandle::get_ptr()` returns
+  const and mutable arguments (const-ref binding). `ReadHandle::get_ptr()` returns
   `const uint8_t *` — the type system prevents subscribers from writing
   through the handle.
-- If the source buffer is non-CUDA, either function auto-promotes via
-  `handle.get_promoted_buffer()`.
 
 ## IPC Behavior
 
