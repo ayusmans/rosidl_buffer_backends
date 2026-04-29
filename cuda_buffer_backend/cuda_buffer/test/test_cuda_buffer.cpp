@@ -69,7 +69,7 @@ TEST_F(CudaBufferTest, AllocateAndWriteHandle)
   allocate_buffer(buffer, 1024);
 
   cuda_buffer_backend::WriteHandle handle =
-    cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+    cuda_buffer_backend::from_output_buffer(buffer, stream1_);
 
   EXPECT_NE(nullptr, handle.get_ptr());
   EXPECT_EQ("cuda", buffer.get_backend_type());
@@ -85,7 +85,7 @@ TEST_F(CudaBufferTest, FromBuffer_PromotesCpuBufferForRead)
   const rosidl::Buffer<uint8_t> & cbuf = buffer;
 
   cuda_buffer_backend::ReadHandle rh =
-    cuda_buffer_backend::from_read_buffer(cbuf, stream1_);
+    cuda_buffer_backend::from_input_buffer(cbuf, stream1_);
   auto promoted = rh.get_promoted_buffer();
   ASSERT_NE(nullptr, promoted);
   EXPECT_EQ(promoted->get_backend_type(), "cuda");
@@ -101,7 +101,7 @@ TEST_F(CudaBufferTest, FromBuffer_PromotesCpuBufferForWrite)
 {
   rosidl::Buffer<uint8_t> buffer(64);
   cuda_buffer_backend::WriteHandle wh =
-    cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+    cuda_buffer_backend::from_output_buffer(buffer, stream1_);
   auto promoted = wh.get_promoted_buffer();
   ASSERT_NE(nullptr, promoted);
   EXPECT_EQ(promoted->get_backend_type(), "cuda");
@@ -117,7 +117,7 @@ TEST_F(CudaBufferTest, FromBuffer_ThrowsOnEmptyBuffer)
   const rosidl::Buffer<uint8_t> & cbuf = buffer;
 
   EXPECT_THROW(
-    cuda_buffer_backend::from_read_buffer(cbuf, stream1_),
+    cuda_buffer_backend::from_input_buffer(cbuf, stream1_),
     cuda_buffer_backend::CudaError);
 }
 
@@ -129,13 +129,13 @@ TEST_F(CudaBufferTest, ToBuffer_CopiesThroughWriteHandle)
   std::vector<uint8_t> host_data(64, 0xCD);
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(buffer, stream1_);
     cuda_buffer_backend::to_buffer(
       host_data.data(), 64, wh, stream1_, cudaMemcpyHostToDevice);
   }
 
   const auto & cbuf = buffer;
-  auto rh = cuda_buffer_backend::from_read_buffer(cbuf, stream1_);
+  auto rh = cuda_buffer_backend::from_input_buffer(cbuf, stream1_);
   std::vector<uint8_t> readback = read_to_host(rh.get_ptr(), 64, stream1_);
   EXPECT_EQ(readback[0], 0xCD);
   EXPECT_EQ(readback[63], 0xCD);
@@ -149,7 +149,7 @@ TEST_F(CudaBufferTest, EventSync_WriteOnStream1_ReadOnStream2)
 
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(buffer, stream1_);
     write_pattern(wh.get_ptr(), N, 42, stream1_);
   }
 
@@ -157,7 +157,7 @@ TEST_F(CudaBufferTest, EventSync_WriteOnStream1_ReadOnStream2)
   {
     const rosidl::Buffer<uint8_t> & cbuf = buffer;
     cuda_buffer_backend::ReadHandle rh =
-      cuda_buffer_backend::from_read_buffer(cbuf, stream2_);
+      cuda_buffer_backend::from_input_buffer(cbuf, stream2_);
     result = read_to_host(rh.get_ptr(), N, stream2_);
   }
 
@@ -173,10 +173,10 @@ TEST_F(CudaBufferTest, DoubleWriteHandle_Throws)
   allocate_buffer(buffer, 256);
 
   cuda_buffer_backend::WriteHandle wh =
-    cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+    cuda_buffer_backend::from_output_buffer(buffer, stream1_);
 
   EXPECT_THROW(
-    cuda_buffer_backend::from_write_buffer(buffer, stream2_),
+    cuda_buffer_backend::from_output_buffer(buffer, stream2_),
     cuda_buffer_backend::CudaError);
 }
 
@@ -187,11 +187,11 @@ TEST_F(CudaBufferTest, WriteAfterFinalized_Throws)
 
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(buffer, stream1_);
   }
 
   EXPECT_THROW(
-    cuda_buffer_backend::from_write_buffer(buffer, stream1_),
+    cuda_buffer_backend::from_output_buffer(buffer, stream1_),
     cuda_buffer_backend::CudaError);
 }
 
@@ -202,17 +202,17 @@ TEST_F(CudaBufferTest, ReadAfterReadEvents_BlocksWrite)
 
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(buffer, stream1_);
   }
 
   {
     const rosidl::Buffer<uint8_t> & cbuf = buffer;
     cuda_buffer_backend::ReadHandle rh =
-      cuda_buffer_backend::from_read_buffer(cbuf, stream2_);
+      cuda_buffer_backend::from_input_buffer(cbuf, stream2_);
   }
 
   EXPECT_THROW(
-    cuda_buffer_backend::from_write_buffer(buffer, stream1_),
+    cuda_buffer_backend::from_output_buffer(buffer, stream1_),
     cuda_buffer_backend::CudaError);
 }
 
@@ -224,7 +224,7 @@ TEST_F(CudaBufferTest, Clone_PreservesData)
 
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(buffer, stream1_);
     write_pattern(wh.get_ptr(), N, 77, stream1_);
   }
 
@@ -255,7 +255,7 @@ TEST_F(CudaBufferTest, ToCpu_PreservesData)
 
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(buffer, stream1_);
     write_pattern(wh.get_ptr(), N, 55, stream1_);
   }
 
@@ -284,7 +284,7 @@ TEST_F(CudaBufferTest, Resize_PreservesPrefix)
 
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(buffer, stream1_);
     write_pattern(wh.get_ptr(), N, 88, stream1_);
   }
 
@@ -315,16 +315,16 @@ TEST_F(CudaBufferTest, GpuPipeline_NoIntermediateCpuSync)
 
   {
     cuda_buffer_backend::WriteHandle wh =
-      cuda_buffer_backend::from_write_buffer(src_buffer, stream1_);
+      cuda_buffer_backend::from_output_buffer(src_buffer, stream1_);
     write_pattern(wh.get_ptr(), N, 99, stream1_);
   }
 
   {
     const rosidl::Buffer<uint8_t> & cbuf = src_buffer;
     cuda_buffer_backend::ReadHandle rh =
-      cuda_buffer_backend::from_read_buffer(cbuf, stream2_);
+      cuda_buffer_backend::from_input_buffer(cbuf, stream2_);
     cuda_buffer_backend::WriteHandle wh2 =
-      cuda_buffer_backend::from_write_buffer(dst_buffer, stream2_);
+      cuda_buffer_backend::from_output_buffer(dst_buffer, stream2_);
     cudaMemcpyAsync(
       wh2.get_ptr(), rh.get_ptr(), N, cudaMemcpyDeviceToDevice, stream2_);
   }
@@ -333,7 +333,7 @@ TEST_F(CudaBufferTest, GpuPipeline_NoIntermediateCpuSync)
   {
     const rosidl::Buffer<uint8_t> & cbuf = dst_buffer;
     cuda_buffer_backend::ReadHandle rh =
-      cuda_buffer_backend::from_read_buffer(cbuf, stream1_);
+      cuda_buffer_backend::from_input_buffer(cbuf, stream1_);
     result = read_to_host(rh.get_ptr(), N, stream1_);
   }
 

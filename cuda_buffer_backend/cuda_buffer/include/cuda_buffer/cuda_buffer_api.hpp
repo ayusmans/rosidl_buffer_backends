@@ -68,16 +68,16 @@ inline CudaBufferImpl<uint8_t> * cuda_impl_of(rosidl::Buffer<uint8_t> & buffer)
 /// \c WriteHandle::get_promoted_buffer() so the caller can substitute the
 /// buffer back into the message they're publishing.
 template<typename T>
-WriteHandle from_write_buffer(
+WriteHandle from_output_buffer(
   rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
   auto * impl = buffer.get_impl();
   if (!impl) {
-    throw CudaError("from_write_buffer called on buffer with null implementation");
+    throw CudaError("from_output_buffer called on buffer with null implementation");
   }
   if (buffer.size() == 0) {
-    throw CudaError("from_write_buffer called on empty buffer");
+    throw CudaError("from_output_buffer called on empty buffer");
   }
   auto * cuda_impl = dynamic_cast<CudaBufferImpl<T> *>(impl);
   if (cuda_impl) {
@@ -100,16 +100,16 @@ WriteHandle from_write_buffer(
 /// \c rosidl::Buffer<uint8_t> is allocated, the source contents are copied
 /// host-to-device, and a read handle for the new buffer is returned.
 template<typename T>
-ReadHandle from_read_buffer(
+ReadHandle from_input_buffer(
   const rosidl::Buffer<T> & buffer,
   cudaStream_t stream)
 {
   const auto * impl = buffer.get_impl();
   if (!impl) {
-    throw CudaError("from_read_buffer called on buffer with null implementation");
+    throw CudaError("from_input_buffer called on buffer with null implementation");
   }
   if (buffer.size() == 0) {
-    throw CudaError("from_read_buffer called on empty buffer");
+    throw CudaError("from_input_buffer called on empty buffer");
   }
   const auto * cuda_impl = dynamic_cast<const CudaBufferImpl<T> *>(impl);
   if (cuda_impl) {

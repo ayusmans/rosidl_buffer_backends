@@ -30,7 +30,7 @@ colcon test-result --verbose
 
 | Package | Description |
 |---|---|
-| `cuda_buffer` | Core CUDA buffer implementation: memory pool, IPC manager, host endpoint manager, and user-facing `allocate_buffer`/`from_read_buffer` / `from_write_buffer`/`to_buffer` APIs |
+| `cuda_buffer` | Core CUDA buffer implementation: memory pool, IPC manager, host endpoint manager, and user-facing `allocate_buffer` / `from_input_buffer` / `from_output_buffer` / `to_buffer` APIs |
 | `cuda_buffer_backend` | Plugin registration via `pluginlib`, endpoint discovery, and descriptor serialization |
 | `cuda_buffer_backend_msgs` | ROS 2 message definition for `CudaBufferDescriptor` |
 
@@ -52,7 +52,7 @@ msg.encoding = "rgb8";
 msg.step = 640 * 3;
 
 cuda_buffer_backend::WriteHandle wh =
-  cuda_buffer_backend::from_write_buffer(msg.data, stream);
+  cuda_buffer_backend::from_output_buffer(msg.data, stream);
 my_kernel<<<...>>>(wh.get_ptr(), ...);
 
 publisher->publish(msg);
@@ -81,7 +81,7 @@ msg.step = 640 * 3;
 
 {
   cuda_buffer_backend::WriteHandle wh =
-    cuda_buffer_backend::from_write_buffer(msg.data, stream);
+    cuda_buffer_backend::from_output_buffer(msg.data, stream);
 
   // From a device pointer (D2D copy, default kind)
   cuda_buffer_backend::to_buffer(gpu_ptr, data_size, wh, stream);
@@ -101,7 +101,7 @@ publisher->publish(msg);
 
 void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
   cuda_buffer_backend::ReadHandle rh =
-    cuda_buffer_backend::from_read_buffer(msg->data, stream);
+    cuda_buffer_backend::from_input_buffer(msg->data, stream);
   // ReadHandle constructor waits on publisher's write_event.
   // rh.get_ptr() returns `const uint8_t *` — the type system enforces read-only access.
 
@@ -111,31 +111,31 @@ void callback(const sensor_msgs::msg::Image::SharedPtr msg) {
 
 ### Auto-promoting non-CUDA buffers
 
-`from_read_buffer` / `from_write_buffer` accept any `rosidl::Buffer<T>`, not
+`from_input_buffer` / `from_output_buffer` accept any `rosidl::Buffer<T>`, not
 just CUDA-backed ones. If the source is a non-CUDA buffer (e.g. the CPU
 fallback path), a new CUDA-backed `rosidl::Buffer<uint8_t>` is allocated on the
 fly and the returned handle points at it. The handle owns the promoted buffer;
 call `handle.get_promoted_buffer()` to retrieve it.
 
-### `from_read_buffer` vs `from_write_buffer`
+### `from_input_buffer` vs `from_output_buffer`
 
-Two explicit functions surface the read/write intent at the call site:
+Two explicit functions surface the input/output intent at the call site:
 
 ```cpp
-// Write path (publisher): requires a mutable buffer.
+// Output path (publisher): requires a mutable buffer and returns WriteHandle.
 cuda_buffer_backend::WriteHandle wh =
-  cuda_buffer_backend::from_write_buffer(msg.data, stream);
+  cuda_buffer_backend::from_output_buffer(msg.data, stream);
 
-// Read path (subscriber): accepts both const and mutable buffers.
+// Input path (subscriber): accepts both const and mutable buffers and returns ReadHandle.
 cuda_buffer_backend::ReadHandle rh =
-  cuda_buffer_backend::from_read_buffer(msg->data, stream);
+  cuda_buffer_backend::from_input_buffer(msg->data, stream);
 ```
 
-- `from_write_buffer` takes `rosidl::Buffer<T> &`; it acquires exclusive write
+- `from_output_buffer` takes `rosidl::Buffer<T> &`; it acquires exclusive write
   access and can only be called once per buffer. A second call (or one after
   finalization) throws `CudaError`. `WriteHandle::get_ptr()` returns
   `uint8_t *`.
-- `from_read_buffer` takes `const rosidl::Buffer<T> &`; it accepts both
+- `from_input_buffer` takes `const rosidl::Buffer<T> &`; it accepts both
   const and mutable arguments (const-ref binding), so you don't need a
   `const Buffer & data = msg->data` alias. `ReadHandle::get_ptr()` returns
   `const uint8_t *` — the type system prevents subscribers from writing

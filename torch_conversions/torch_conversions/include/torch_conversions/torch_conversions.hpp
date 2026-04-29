@@ -629,7 +629,7 @@ inline void to_tensor_msg(TensorMsg & msg, const at::Tensor & tensor)
 #ifdef TORCH_CONVERSIONS_HAS_CUDA
   if (backend == "cuda") {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
-    auto wh = cuda_buffer_backend::from_write_buffer(msg.data, stream);
+    auto wh = cuda_buffer_backend::from_output_buffer(msg.data, stream);
     cudaMemcpyKind kind = contig.is_cuda() ?
       cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
     cuda_buffer_backend::to_buffer(

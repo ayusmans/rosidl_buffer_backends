@@ -106,7 +106,7 @@ private:
       if (backend_type == "cuda") {
         const rosidl::Buffer<uint8_t> & data = msg->data;
         cuda_buffer_backend::ReadHandle read_handle =
-          cuda_buffer_backend::from_read_buffer(data, stream_);
+          cuda_buffer_backend::from_input_buffer(data, stream_);
         cpu_data.resize(msg->data.size());
         cudaMemcpyAsync(
           cpu_data.data(), read_handle.get_ptr(),

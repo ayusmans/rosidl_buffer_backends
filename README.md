@@ -47,27 +47,27 @@ Per-package build, test, and run details live in each package's README:
 sensor_msgs::msg::Image msg;
 msg.data = cuda_buffer_backend::allocate_buffer(byte_count);
 {
-  auto wh = cuda_buffer_backend::from_write_buffer(msg.data, stream);
+  auto wh = cuda_buffer_backend::from_output_buffer(msg.data, stream);
   my_kernel<<<...>>>(wh.get_ptr(), ...);  // wh.get_ptr() returns uint8_t *
 }  // wh destructor records the write event on `stream`
 
 // Publisher: copy from an existing host/device pointer into a pre-allocated buffer.
 {
-  auto wh = cuda_buffer_backend::from_write_buffer(msg.data, stream);
+  auto wh = cuda_buffer_backend::from_output_buffer(msg.data, stream);
   cuda_buffer_backend::to_buffer(host_ptr, byte_count, wh, stream,
     cudaMemcpyHostToDevice);
 }
 
-// Subscriber: read handle (waits on publisher's write event).
-// from_read_buffer takes `const Buffer &` and accepts both const and mutable
+// Subscriber: input/read handle (waits on publisher's write event).
+// from_input_buffer takes `const Buffer &` and accepts both const and mutable
 // arguments; no `const Buffer & data = ...` alias is needed.
-auto rh = cuda_buffer_backend::from_read_buffer(msg->data, stream);
+auto rh = cuda_buffer_backend::from_input_buffer(msg->data, stream);
 use_data<<<...>>>(rh.get_ptr(), ...);  // rh.get_ptr() returns const uint8_t *
 
 // Auto-promotion: passing a non-CUDA buffer allocates a fresh CUDA buffer
-// and (for reads) copies H2D; the handle owns the new buffer via
+// and (for inputs) copies H2D; the handle owns the new buffer via
 // get_promoted_buffer().
-auto rh_any = cuda_buffer_backend::from_read_buffer(cpu_or_other_buf, stream);
+auto rh_any = cuda_buffer_backend::from_input_buffer(cpu_or_other_buf, stream);
 std::shared_ptr<rosidl::Buffer<uint8_t>> promoted = rh_any.get_promoted_buffer();
 ```
 

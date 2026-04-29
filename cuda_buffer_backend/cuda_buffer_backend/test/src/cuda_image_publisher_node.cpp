@@ -86,7 +86,7 @@ private:
 
     {
       cuda_buffer_backend::WriteHandle write_handle =
-        cuda_buffer_backend::from_write_buffer(msg.data, stream_);
+        cuda_buffer_backend::from_output_buffer(msg.data, stream_);
       cudaMemsetAsync(write_handle.get_ptr(), static_cast<int>(count_ % 256),
         data_size, stream_);
     }

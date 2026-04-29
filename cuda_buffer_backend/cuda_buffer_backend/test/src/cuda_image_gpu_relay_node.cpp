@@ -82,9 +82,9 @@ private:
     {
       const rosidl::Buffer<uint8_t> & src = msg->data;
       cuda_buffer_backend::ReadHandle rh =
-        cuda_buffer_backend::from_read_buffer(src, stream_);
+        cuda_buffer_backend::from_input_buffer(src, stream_);
       cuda_buffer_backend::WriteHandle wh =
-        cuda_buffer_backend::from_write_buffer(out.data, stream_);
+        cuda_buffer_backend::from_output_buffer(out.data, stream_);
       cudaMemcpyAsync(wh.get_ptr(), rh.get_ptr(), byte_size,
         cudaMemcpyDeviceToDevice, stream_);
     }
