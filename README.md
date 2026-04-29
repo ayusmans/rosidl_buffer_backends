@@ -75,7 +75,7 @@ auto msg = torch_conversions::allocate_tensor_msg(
 at::Tensor t_out = torch_conversions::from_output_tensor_msg(msg);
 my_pipeline(t_out);
 
-// Subscriber: zero-copy read view of the received message.
+// Subscriber: independent tensor by default.
 auto guard = torch_conversions::set_stream();
 at::Tensor t_in = torch_conversions::from_input_tensor_msg(msg);
 ```
