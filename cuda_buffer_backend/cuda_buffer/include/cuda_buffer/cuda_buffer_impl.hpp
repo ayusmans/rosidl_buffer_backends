@@ -152,6 +152,7 @@ public:
 
   void set_stream(cudaStream_t stream) {stream_ = stream;}
   cudaStream_t get_stream() const {return stream_;}
+  int get_device_id() const {return cuda_buffer_.get_device_id();}
 
   static std::shared_ptr<CudaMemoryPool> get_or_create_global_pool()
   {
@@ -199,7 +200,8 @@ private:
     }
 
     buffer = CudaBuffer(
-      reinterpret_cast<void *>(block->va), byte_size, pool->deleter(block));
+      reinterpret_cast<void *>(block->va), byte_size, pool->get_device_id(),
+      pool->deleter(block));
 
     if (ev) {
       buffer.set_write_event(ev, true);

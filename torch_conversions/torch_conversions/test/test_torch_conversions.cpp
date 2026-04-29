@@ -47,9 +47,6 @@ TEST(TorchTensorBridge, AllocateCpuTensorPopulatesDlpackMetadata)
   EXPECT_EQ(msg.dtype_bits, 32u);
   EXPECT_EQ(msg.dtype_lanes, 1u);
 
-  EXPECT_EQ(msg.device_type, static_cast<int32_t>(kDLCPU));
-  EXPECT_EQ(msg.device_id, 0);
-
   EXPECT_EQ(msg.byte_offset, 0u);
   EXPECT_EQ(msg.data.size(), 2u * 3u * 4u * sizeof(float));
   EXPECT_EQ(msg.data.get_backend_type(), "cpu");

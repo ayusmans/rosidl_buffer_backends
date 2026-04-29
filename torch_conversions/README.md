@@ -1,37 +1,37 @@
 # torch_conversions (DLPack-aligned)
 
 Header-only helper library that converts between a DLPack-shaped ROS 2
-message (`tensor_msgs/Tensor`) and an `at::Tensor`, riding on top of
+message (`tensor_msgs/ExperimentalTensor`) and an `at::Tensor`, riding on top of
 whichever `rosidl::Buffer` storage backend is registered at runtime.
 
 The message schema follows [DLPack](https://dmlc.github.io/dlpack/latest/)
-exactly, so any DLPack-compatible framework (PyTorch, TensorFlow, JAX,
-CuPy, ONNX Runtime, TensorRT, MXNet, RAPIDS, ...) can plug in via a thin
-wrapper and interoperate over the wire without re-encoding metadata.
+tensor metadata, so any DLPack-compatible framework (PyTorch, TensorFlow,
+JAX, CuPy, ONNX Runtime, MXNet, RAPIDS, ...) can plug in via a thin wrapper
+and interoperate over the wire without re-encoding shape / dtype metadata.
+
+> **Status: experimental.** The message is named `ExperimentalTensor` on
+> purpose. The schema is used internally to validate the buffer-backend
+> design and may change before it is renamed to `Tensor` and stabilized.
 
 ## Packages
 
 | Package | Description |
 |---|---|
-| `tensor_msgs` | `Tensor.msg` definition: DLPack-aligned `{dtype_code, dtype_bits, dtype_lanes}`, `{device_type, device_id}`, `shape[]`, `strides[]`, `byte_offset`, `data[]`. |
-| `torch_conversions` | Header-only library: allocation, `at::Tensor` ↔ `Tensor.msg` conversion, DLPack export, and CUDA stream helpers. |
+| `tensor_msgs` | `ExperimentalTensor.msg` definition: DLPack-aligned `{dtype_code, dtype_bits, dtype_lanes}`, `shape[]`, `strides[]`, `byte_offset`, `data[]`. |
+| `torch_conversions` | Header-only library: allocation, `at::Tensor` ↔ `ExperimentalTensor.msg` conversion, DLPack export, and CUDA stream helpers. |
 
 There is no pluginlib plugin, no `BufferImplBase` subclass, and no custom
 descriptor. The `uint8[] data` field maps to `rosidl::Buffer<uint8_t>`,
 which transparently uses `cuda_buffer_backend` for GPU zero-copy when
 both peers support it and falls back to CPU CDR otherwise.
 
-## The `Tensor.msg` schema
+## The `ExperimentalTensor.msg` schema
 
 ```
 # DLDataType
 uint8  dtype_code        # DLPack DLDataTypeCode: 0=Int, 1=UInt, 2=Float, 4=BFloat, 6=Bool, ...
 uint8  dtype_bits        # 8, 16, 32, 64, ...
 uint16 dtype_lanes       # SIMD lanes; 1 for plain scalar
-
-# DLDevice
-int32 device_type        # DLPack DLDeviceType: 1=CPU, 2=CUDA, 3=CUDAHost, 10=ROCm, 13=CUDAManaged, ...
-int32 device_id          # device ordinal
 
 # DLTensor
 int64[] shape
@@ -42,8 +42,10 @@ uint64  byte_offset      # view offset into `data`
 uint8[] data
 ```
 
-Field-for-field transcription of `DLTensor`. Producing or consuming a
-`DLManagedTensor` on either side is one helper call.
+The message carries DLPack's dtype / shape / stride / offset metadata. The
+`DLDevice` fields are derived from the underlying `msg.data` buffer backend
+when exporting to DLPack (`cpu` -> `kDLCPU`, `cuda` -> `kDLCUDA` plus the
+pointer's CUDA device).
 
 ## Build
 
@@ -59,7 +61,7 @@ source install/setup.sh
 ## API reference
 
 All entry points are in namespace `torch_conversions`. `TensorMsg` is a
-type alias for `tensor_msgs::msg::Tensor`.
+type alias for `tensor_msgs::msg::ExperimentalTensor`.
 
 ### Allocation
 
@@ -119,7 +121,7 @@ builds the guard is a no-op.
 
 ```cpp
 #include "torch_conversions/torch_conversions.hpp"
-#include "tensor_msgs/msg/tensor.hpp"
+#include "tensor_msgs/msg/experimental_tensor.hpp"
 
 void timer_cb()
 {
@@ -140,7 +142,7 @@ void timer_cb()
 ### Subscriber
 
 ```cpp
-void cb(const tensor_msgs::msg::Tensor::SharedPtr msg)
+void cb(const tensor_msgs::msg::ExperimentalTensor::SharedPtr msg)
 {
   auto guard = torch_conversions::set_stream();
 
@@ -158,7 +160,7 @@ void cb(const tensor_msgs::msg::Tensor::SharedPtr msg)
 ```cpp
 at::Tensor t = compute_something();             // arbitrary at::Tensor
 
-tensor_msgs::msg::Tensor msg;
+tensor_msgs::msg::ExperimentalTensor msg;
 torch_conversions::to_tensor_msg(msg, t);        // copies data, fills shape/strides/dtype/device
 publisher_->publish(msg);
 ```

@@ -39,6 +39,7 @@ public:
   CudaBuffer(CudaBuffer && other) noexcept
   : device_ptr_(std::move(other.device_ptr_)),
     size_(other.size_),
+    device_id_(other.device_id_),
     write_event_(other.write_event_),
     owns_write_event_(other.owns_write_event_),
     read_events_(std::move(other.read_events_)),
@@ -46,6 +47,7 @@ public:
     recycler_(std::move(other.recycler_))
   {
     other.size_ = 0;
+    other.device_id_ = 0;
     other.write_event_ = nullptr;
     other.owns_write_event_ = false;
   }
@@ -58,6 +60,7 @@ public:
     if (this != &other) {
       std::swap(device_ptr_, other.device_ptr_);
       std::swap(size_, other.size_);
+      std::swap(device_id_, other.device_id_);
       std::swap(write_event_, other.write_event_);
       std::swap(owns_write_event_, other.owns_write_event_);
       std::swap(read_events_, other.read_events_);
@@ -69,7 +72,9 @@ public:
 
   ~CudaBuffer();
 
-  CudaBuffer(void * ptr, size_t size, std::function<void(uint8_t *)> custom_deleter);
+  CudaBuffer(
+    void * ptr, size_t size, int device_id,
+    std::function<void(uint8_t *)> custom_deleter);
 
   ReadHandle get_read_handle(cudaStream_t stream) const;
   WriteHandle get_write_handle(cudaStream_t stream);
@@ -85,6 +90,7 @@ public:
   void finalize_write_handle() const;
 
   size_t size() const {return size_;}
+  int get_device_id() const {return device_id_;}
   uint8_t * get_device_ptr() {return device_ptr_.get();}
   const uint8_t * get_device_ptr() const {return device_ptr_.get();}
 
@@ -98,6 +104,7 @@ private:
     nullptr, default_cuda_free
   };
   size_t size_{0};
+  int device_id_{0};
 
   mutable cudaEvent_t write_event_{nullptr};
   bool owns_write_event_{false};

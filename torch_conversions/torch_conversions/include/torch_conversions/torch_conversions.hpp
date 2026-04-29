@@ -31,7 +31,7 @@
 #include <vector>
 
 #include "rosidl_buffer/buffer.hpp"
-#include "tensor_msgs/msg/tensor.hpp"
+#include "tensor_msgs/msg/experimental_tensor.hpp"
 
 #if __has_include("cuda_buffer/cuda_buffer_api.hpp")
 #include <c10/cuda/CUDAStream.h>
@@ -43,7 +43,7 @@
 namespace torch_conversions
 {
 
-using TensorMsg = tensor_msgs::msg::Tensor;
+using TensorMsg = tensor_msgs::msg::ExperimentalTensor;
 
 namespace detail
 {
@@ -231,18 +231,13 @@ inline TensorMsg allocate_tensor_msg(
 
 #ifdef TORCH_CONVERSIONS_HAS_CUDA
   if (dev == c10::kCUDA) {
-    int cur = 0;
-    cudaGetDevice(&cur);
-    msg.device_type = static_cast<int32_t>(kDLCUDA);
-    msg.device_id = cur;
-    auto cuda_impl = std::make_unique<cuda_buffer_backend::CudaBufferImpl<uint8_t>>(byte_count);
+    auto cuda_impl =
+      std::make_unique<cuda_buffer_backend::CudaBufferImpl<uint8_t>>(byte_count);
     msg.data = rosidl::Buffer<uint8_t>(std::move(cuda_impl));
     return msg;
   }
 #endif
   if (dev == c10::kCPU) {
-    msg.device_type = static_cast<int32_t>(kDLCPU);
-    msg.device_id = 0;
     msg.data.resize(byte_count);
     return msg;
   }
@@ -297,11 +292,12 @@ inline void fill_dl_tensor(
   const TensorMsg & msg,
   const BridgeDlCtx & ctx,
   void * data_ptr,
-  int32_t dev_type)
+  int32_t dev_type,
+  int32_t dev_id)
 {
   auto * offset_ptr = static_cast<uint8_t *>(data_ptr) + msg.byte_offset;
   dlm.dl_tensor.data = static_cast<void *>(offset_ptr);
-  dlm.dl_tensor.device = DLDevice{static_cast<DLDeviceType>(dev_type), msg.device_id};
+  dlm.dl_tensor.device = DLDevice{static_cast<DLDeviceType>(dev_type), dev_id};
   dlm.dl_tensor.ndim = static_cast<int32_t>(ctx.shape.size());
   dlm.dl_tensor.dtype = DLDataType{msg.dtype_code, msg.dtype_bits, msg.dtype_lanes};
   dlm.dl_tensor.shape = const_cast<int64_t *>(ctx.shape.data());
@@ -325,6 +321,7 @@ inline DLManagedTensor * make_dlpack_read(
 
   void * data_ptr = nullptr;
   int32_t dev_type = kDLCPU;
+  int32_t dev_id = 0;
 
   const std::string & backend = msg.data.get_backend_type();
   if (backend == "cuda") {
@@ -339,6 +336,7 @@ inline DLManagedTensor * make_dlpack_read(
       cuda_impl->get_cuda_buffer().get_read_handle(consumer_stream));
     data_ptr = const_cast<void *>(static_cast<const void *>(ctx->rh->get_ptr()));
     dev_type = kDLCUDA;
+    dev_id = cuda_impl->get_device_id();
   } else if (backend == "cpu") {
     (void)consumer_stream;
     data_ptr = const_cast<void *>(static_cast<const void *>(msg.data.data()));
@@ -350,7 +348,7 @@ inline DLManagedTensor * make_dlpack_read(
   }
 
   auto * dlm = new DLManagedTensor;
-  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, dev_type);
+  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, dev_type, dev_id);
   dlm->manager_ctx = ctx.release();
   dlm->deleter = detail::bridge_dl_deleter;
   return dlm;
@@ -370,6 +368,7 @@ inline DLManagedTensor * make_dlpack_write(
 
   void * data_ptr = nullptr;
   int32_t dev_type = kDLCPU;
+  int32_t dev_id = 0;
 
   const std::string & backend = msg.data.get_backend_type();
   if (backend == "cuda") {
@@ -385,6 +384,7 @@ inline DLManagedTensor * make_dlpack_write(
       cuda_impl->get_cuda_buffer().get_write_handle(consumer_stream));
     data_ptr = static_cast<void *>(ctx->wh->get_ptr());
     dev_type = kDLCUDA;
+    dev_id = cuda_impl->get_device_id();
   } else if (backend == "cpu") {
     (void)consumer_stream;
     data_ptr = static_cast<void *>(msg.data.data());
@@ -396,7 +396,7 @@ inline DLManagedTensor * make_dlpack_write(
   }
 
   auto * dlm = new DLManagedTensor;
-  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, dev_type);
+  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, dev_type, dev_id);
   dlm->manager_ctx = ctx.release();
   dlm->deleter = detail::bridge_dl_deleter;
   return dlm;
@@ -419,7 +419,7 @@ inline DLManagedTensor * make_dlpack_read(const TensorMsg & msg)
   void * data_ptr = const_cast<void *>(static_cast<const void *>(msg.data.data()));
 
   auto * dlm = new DLManagedTensor;
-  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, kDLCPU);
+  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, kDLCPU, 0);
   dlm->manager_ctx = ctx.release();
   dlm->deleter = detail::bridge_dl_deleter;
   return dlm;
@@ -439,7 +439,7 @@ inline DLManagedTensor * make_dlpack_write(TensorMsg & msg)
   void * data_ptr = static_cast<void *>(msg.data.data());
 
   auto * dlm = new DLManagedTensor;
-  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, kDLCPU);
+  detail::fill_dl_tensor(*dlm, msg, *ctx, data_ptr, kDLCPU, 0);
   dlm->manager_ctx = ctx.release();
   dlm->deleter = detail::bridge_dl_deleter;
   return dlm;
@@ -606,11 +606,10 @@ inline void fill_metadata_via_dlpack(TensorMsg & msg, const at::Tensor & t)
 
 }  // namespace detail
 
-/// Copy `tensor` into msg.data (pre-allocated, with the same device as the
-/// source tensor's) and refresh msg metadata to the contiguous form.
+/// Copy `tensor` into msg.data (pre-allocated by the selected buffer backend)
+/// and refresh msg metadata to the contiguous form.
 /// `byte_offset` is reset to 0; shape/strides/dtype are overwritten.
-/// Device fields are left untouched (the storage device is fixed at
-/// allocation time).
+/// Device placement is derived from msg.data's backend when exported to DLPack.
 inline void to_tensor_msg(TensorMsg & msg, const at::Tensor & tensor)
 {
   if (!tensor.defined() || tensor.numel() == 0) {

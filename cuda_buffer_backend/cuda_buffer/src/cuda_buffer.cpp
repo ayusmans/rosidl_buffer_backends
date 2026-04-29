@@ -115,8 +115,10 @@ private:
 // -- CudaBuffer --
 
 CudaBuffer::CudaBuffer(
-  void * ptr, size_t size, std::function<void(uint8_t *)> custom_deleter)
+  void * ptr, size_t size, int device_id,
+  std::function<void(uint8_t *)> custom_deleter)
 : device_ptr_(static_cast<uint8_t *>(ptr), std::move(custom_deleter)), size_(size),
+  device_id_(device_id),
   recycler_(BufferRecycler::get_instance())
 {
 }

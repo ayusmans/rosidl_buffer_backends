@@ -13,9 +13,9 @@ PyTorch-side helper library that builds on the same buffer infrastructure.
   descriptors.
 - **libtorch_vendor** -- Vendor package that downloads and installs the
   pre-built LibTorch C++ distribution.
-- **tensor_msgs** -- DLPack-aligned `Tensor.msg` definition.
+- **tensor_msgs** -- DLPack-aligned `ExperimentalTensor.msg` definition.
 - **torch_conversions** -- Header-only helper library that converts between
-  `tensor_msgs/Tensor` and `at::Tensor` and exposes DLPack import /
+  `tensor_msgs/ExperimentalTensor` and `at::Tensor` and exposes DLPack import /
   export. Replaces the older `torch_buffer_backend` plugin approach with a
   plain message + bridge library that rides on top of whichever
   `rosidl::Buffer` backend is registered (CUDA when available, CPU
@@ -75,7 +75,7 @@ std::shared_ptr<rosidl::Buffer<uint8_t>> promoted = rh_any.get_promoted_buffer()
 
 ```cpp
 #include "torch_conversions/torch_conversions.hpp"
-#include "tensor_msgs/msg/tensor.hpp"
+#include "tensor_msgs/msg/experimental_tensor.hpp"
 
 // Publisher: allocate a Tensor message (CUDA-backed if available).
 auto msg = torch_conversions::allocate_tensor_msg(
@@ -89,10 +89,11 @@ my_pipeline(t_out);
 at::Tensor t_in = torch_conversions::from_input_tensor_msg(msg);
 ```
 
-The message schema is a field-for-field transcription of DLPack's
-`DLTensor`, so any DLPack-compatible framework (PyTorch, TensorFlow, JAX,
-CuPy, ONNX Runtime, ...) can interoperate over the wire by converting to /
-from its own DLPack representation.
+The message schema carries DLPack's dtype / shape / stride / offset
+metadata, while device placement is derived from the underlying
+`rosidl::Buffer` backend. Any DLPack-compatible framework (PyTorch,
+TensorFlow, JAX, CuPy, ONNX Runtime, ...) can interoperate over the wire by
+converting to / from its own DLPack representation.
 
 ## License
 

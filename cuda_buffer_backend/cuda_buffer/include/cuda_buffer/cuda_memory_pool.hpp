@@ -120,6 +120,7 @@ public:
   }
 
   bool is_ipc_capable() const {return ipc_capable_;}
+  int get_device_id() const {return device_id_;}
 
 private:
   bool is_block_ready(VmmBlock * block) const;

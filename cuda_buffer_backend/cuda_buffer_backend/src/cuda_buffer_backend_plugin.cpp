@@ -159,9 +159,7 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
   descriptor->size = cuda_impl->size();
   descriptor->element_type_name = typeid(uint8_t).name();
 
-  int device_id = 0;
-  CUDA_CHECK(cudaGetDevice(&device_id));
-  descriptor->device_id = device_id;
+  descriptor->device_id = cuda_impl->get_device_id();
 
   CUdeviceptr dev_ptr = reinterpret_cast<CUdeviceptr>(
     cuda_impl->get_cuda_buffer().get_device_ptr());
@@ -256,7 +254,8 @@ std::unique_ptr<void, void (*)(void *)> CudaBufferBackend::from_descriptor_with_
           }
         };
       CudaBuffer imported_buffer(
-        reinterpret_cast<void *>(import_result.va), byte_size, deleter);
+        reinterpret_cast<void *>(import_result.va), byte_size,
+        descriptor->device_id, deleter);
 
       bool has_event = false;
       for (size_t i = 0; i < descriptor->ipc_event_handle.size(); ++i) {
