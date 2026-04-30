@@ -104,18 +104,21 @@ queries it for the remote gid.
 
 ```mermaid
 flowchart TD
-  A["VMM block in CudaMemoryPool"] --> B["Wrapped by CudaBuffer in msg.data"]
-  B --> C["Publisher writes through WriteHandle"]
-  C --> D["WriteHandle records write event"]
-  D --> E["Message is published"]
+  A["VMM block in pool"] --> B["Publisher CudaBuffer"]
+  B --> C["WriteHandle records write event"]
+  C --> D["Descriptor published"]
 
-  E --> F["Remote subscriber imports the block and increments IPC refcount"]
-  F --> G["Imported ReadHandle records local read event"]
-  G --> H["Imported CudaBuffer is released"]
-  H --> I["Local recycler waits for recorded read events"]
-  I --> J["IPC refcount is decremented"]
+  D --> E["Subscriber imports block"]
+  E --> F{"Descriptor UID matches shared-memory UID?"}
+  F -->|"yes"| G["IPC refcount increments"]
+  F -->|"no"| S["stale buffer, discard"]
+  G --> H["Local CudaBuffer and ReadHandle"]
+  H --> I["Local recycler waits read events"]
+  I --> J["IPC refcount decrements"]
 
-  J --> K["Publisher pool may reuse block after IPC refcount is zero and grace window elapsed"]
+  J --> K{"Safe to recycle?"}
+  K -->|"refcount zero and grace elapsed"| A
+  K -->|"otherwise"| K
 ```
 
 A CUDA buffer is a pooled VMM block wrapped in `CudaBuffer`. When the block is
@@ -125,5 +128,5 @@ alive inside that process. When the last local owner is released, the recycler
 waits for recorded CUDA read events before decrementing the IPC refcount.
 The publisher may recycle the block only after the IPC refcount returns to
 zero and a short grace window has elapsed. If a late subscriber still races
-with reuse, it detects stale data by comparing the descriptor UID with the UID
-stored in shared memory.
+with reuse, it detects stale data on first access by comparing the descriptor
+UID with the UID stored in shared memory.
