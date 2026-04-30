@@ -100,24 +100,30 @@ Locality comes from `HostEndpointManager`: every backend's
 flag) into the host-wide shared registry, and `on_discovering_endpoint`
 queries it for the remote gid.
 
-## Cache lifetime
+## CUDA buffer lifetime
 
-The subscriber-side import cache is keyed by `(publisher_pid, block_id)`.
-This pair is **process-lifetime stable** on the publisher side: the
-publisher's pid is fixed for its lifetime, and pool block_ids are
-allocated once and preserved across recycles.
+```mermaid
+flowchart TD
+  A["VMM block in CudaMemoryPool"] --> B["Wrapped by CudaBuffer in msg.data"]
+  B --> C["Publisher writes through WriteHandle"]
+  C --> D["WriteHandle records write event"]
+  D --> E["Message is published"]
 
-Therefore an entry in the cache is valid for the publisher's lifetime, and
-we keep it cached for the subscriber's lifetime. Reclamation happens
-automatically at subscriber process exit:
+  E --> F["Remote subscriber imports the block and increments IPC refcount"]
+  F --> G["Imported ReadHandle records local read event"]
+  G --> H["Imported CudaBuffer is released"]
+  H --> I["Local recycler waits for recorded read events"]
+  I --> J["IPC refcount is decremented"]
 
-- **CUDA driver context teardown** drops every `cuMemImportFromShareableHandle`
-  / `cuMemMap` mapping owned by the process.
-- **Kernel process reaping** unmaps every `mmap`'d `IPCMetadata` page and
-  reclaims the heap allocation backing the cache map.
+  J --> K["Publisher pool may reuse block after IPC refcount is zero and grace window elapsed"]
+```
 
-The publisher side does need to know when a subscriber is done with a
-block so the pool can recycle. That signal is the per-block
-`IPCMetadata::refcount`: each subscriber-side `Buffer` deleter decrements
-it; the pool considers a block "ready" only when `refcount == 0` AND a
-short grace window has elapsed since the last publish.
+A CUDA buffer is a pooled VMM block wrapped in `CudaBuffer`. When the block is
+imported in another process, the import increments the shared-memory IPC
+refcount, while local `shared_ptr` ownership keeps the imported `CudaBuffer`
+alive inside that process. When the last local owner is released, the recycler
+waits for recorded CUDA read events before decrementing the IPC refcount.
+The publisher may recycle the block only after the IPC refcount returns to
+zero and a short grace window has elapsed. If a late subscriber still races
+with reuse, it detects stale data by comparing the descriptor UID with the UID
+stored in shared memory.
