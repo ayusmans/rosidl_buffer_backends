@@ -122,7 +122,7 @@ private:
   static uint32_t hash_string(const std::string & str);
 
   static std::mutex instances_mutex_;
-  static std::unordered_map<size_t, std::weak_ptr<HostEndpointManager>> instances_;
+  static std::unordered_map<size_t, std::shared_ptr<HostEndpointManager>> instances_;
 
   const size_t domain_id_;
   uint64_t instance_id_;

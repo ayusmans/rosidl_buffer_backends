@@ -10,7 +10,7 @@
   <license>Apache-2.0</license>
   <author email="yuankunz@nvidia.com">Yuankun Zhu</author>
 
-  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
   <depend>cuda_buffer</depend>
   <depend>cuda_buffer_backend_msgs</depend>

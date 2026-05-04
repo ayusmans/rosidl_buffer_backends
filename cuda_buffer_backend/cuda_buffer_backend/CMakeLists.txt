@@ -9,18 +9,11 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-find_package(ament_cmake REQUIRED)
-find_package(rosidl_buffer_backend REQUIRED)
-find_package(rosidl_runtime_cpp REQUIRED)
-find_package(rosidl_buffer_backend_registry REQUIRED)
-find_package(pluginlib REQUIRED)
-find_package(cuda_buffer REQUIRED)
-find_package(cuda_buffer_backend_msgs REQUIRED)
-find_package(rcutils REQUIRED)
-find_package(rosidl_typesupport_cpp REQUIRED)
+find_package(ament_cmake_auto REQUIRED)
+ament_auto_find_build_dependencies()
 find_package(CUDAToolkit REQUIRED)
 
-add_library(${PROJECT_NAME} SHARED
+ament_auto_add_library(${PROJECT_NAME} SHARED
   src/cuda_buffer_backend_plugin.cpp
 )
 
@@ -29,7 +22,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 
-target_link_libraries(${PROJECT_NAME} PUBLIC
+target_link_libraries(${PROJECT_NAME}
   ${cuda_buffer_backend_msgs_TARGETS}
   rosidl_buffer_backend::rosidl_buffer_backend
   rosidl_runtime_cpp::rosidl_runtime_cpp
@@ -49,38 +42,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
   INSTALL_RPATH_USE_LINK_PATH TRUE
 )
 
-install(
-  DIRECTORY include/
-  DESTINATION include/${PROJECT_NAME}
-)
-
-install(
-  TARGETS ${PROJECT_NAME}
-  EXPORT ${PROJECT_NAME}
-  LIBRARY DESTINATION lib
-  ARCHIVE DESTINATION lib
-  RUNTIME DESTINATION bin
-  INCLUDES DESTINATION include/${PROJECT_NAME}
-)
-
-install(
-  FILES cuda_buffer_plugin.xml
-  DESTINATION share/${PROJECT_NAME}
-)
-
 pluginlib_export_plugin_description_file(rosidl_buffer_backend cuda_buffer_plugin.xml)
-
-ament_export_targets(${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(
-  rosidl_buffer_backend
-  rosidl_runtime_cpp
-  rosidl_buffer_backend_registry
-  rosidl_typesupport_cpp
-  pluginlib
-  cuda_buffer
-  cuda_buffer_backend_msgs
-  rcutils
-)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -107,7 +69,7 @@ if(BUILD_TESTING)
     )
   endif()
 
-  add_library(cuda_image_publisher_component SHARED
+  ament_auto_add_library(cuda_image_publisher_component SHARED
     test/src/cuda_image_publisher_node.cpp
   )
   target_link_libraries(cuda_image_publisher_component
@@ -122,7 +84,7 @@ if(BUILD_TESTING)
   rclcpp_components_register_nodes(cuda_image_publisher_component
     "CudaImagePublisher")
 
-  add_library(cuda_image_subscriber_component SHARED
+  ament_auto_add_library(cuda_image_subscriber_component SHARED
     test/src/cuda_image_subscriber_node.cpp
   )
   target_link_libraries(cuda_image_subscriber_component
@@ -137,7 +99,7 @@ if(BUILD_TESTING)
   rclcpp_components_register_nodes(cuda_image_subscriber_component
     "CudaImageSubscriber")
 
-  add_library(cuda_image_gpu_relay_component SHARED
+  ament_auto_add_library(cuda_image_gpu_relay_component SHARED
     test/src/cuda_image_gpu_relay_node.cpp
   )
   target_link_libraries(cuda_image_gpu_relay_component
@@ -193,4 +155,4 @@ if(BUILD_TESTING)
   )
 endif()
 
-ament_package()
+ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR)

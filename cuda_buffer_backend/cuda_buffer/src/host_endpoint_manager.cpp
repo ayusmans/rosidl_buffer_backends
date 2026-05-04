@@ -130,7 +130,7 @@ static bool has_active_entries(const EndpointRegistry * registry)
 }
 
 std::mutex HostEndpointManager::instances_mutex_;
-std::unordered_map<size_t, std::weak_ptr<HostEndpointManager>>
+std::unordered_map<size_t, std::shared_ptr<HostEndpointManager>>
 HostEndpointManager::instances_;
 
 std::shared_ptr<HostEndpointManager>
@@ -140,10 +140,7 @@ HostEndpointManager::get_instance(size_t domain_id)
 
   auto it = instances_.find(domain_id);
   if (it != instances_.end()) {
-    if (auto existing = it->second.lock()) {
-      return existing;
-    }
-    instances_.erase(it);
+    return it->second;
   }
 
   auto instance = std::shared_ptr<HostEndpointManager>(
