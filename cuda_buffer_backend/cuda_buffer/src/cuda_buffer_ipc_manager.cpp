@@ -473,26 +473,42 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
   if (ipc_meta) {
     ipc_meta->refcount.fetch_add(1, std::memory_order_acq_rel);
   }
+
+  CUmemGenericAllocationHandle handle = 0;
+  CUdeviceptr va = 0;
+  bool handle_imported = false;
+  bool address_reserved = false;
+  bool mapped = false;
+
+  auto cleanup_failed_import = [&]() {
+      if (mapped) {
+        cuMemUnmap(va, size);
+      }
+      if (address_reserved) {
+        cuMemAddressFree(va, size);
+      }
+      if (handle_imported) {
+        cuMemRelease(handle);
+      }
+      if (ipc_meta) {
+        ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
+        munmap(ipc_meta, sizeof(IPCMetadata));
+      }
+    };
+
   try {
     check_uid_staleness(ipc_meta, block_id, pid, expected_uid);
   } catch (...) {
-    if (ipc_meta) {
-      ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
-      munmap(ipc_meta, sizeof(IPCMetadata));
-    }
+    cleanup_failed_import();
     throw;
   }
 
   int fd = receive_fd_from_socket(socket_path);
   if (fd < 0) {
-    if (ipc_meta) {
-      ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
-      munmap(ipc_meta, sizeof(IPCMetadata));
-    }
+    cleanup_failed_import();
     throw CudaError("Failed to receive VMM FD from socket: " + socket_path);
   }
 
-  CUmemGenericAllocationHandle handle = 0;
   CUresult r = cuMemImportFromShareableHandle(
     &handle,
     reinterpret_cast<void *>(static_cast<intptr_t>(fd)),
@@ -501,50 +517,38 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
   close(fd);
 
   if (r != CUDA_SUCCESS) {
-    if (ipc_meta) {
-      ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
-      munmap(ipc_meta, sizeof(IPCMetadata));
-    }
+    cleanup_failed_import();
     throw CudaError(__FILE__, __LINE__, "cuMemImportFromShareableHandle", r);
   }
+  handle_imported = true;
 
-  CUdeviceptr va = 0;
   r = cuMemAddressReserve(&va, size, 0, 0, 0);
   if (r != CUDA_SUCCESS) {
-    cuMemRelease(handle);
-    if (ipc_meta) {
-      ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
-      munmap(ipc_meta, sizeof(IPCMetadata));
-    }
+    cleanup_failed_import();
     throw CudaError(__FILE__, __LINE__, "cuMemAddressReserve", r);
   }
+  address_reserved = true;
 
   r = cuMemMap(va, size, 0, handle, 0);
   if (r != CUDA_SUCCESS) {
-    cuMemAddressFree(va, size);
-    cuMemRelease(handle);
-    if (ipc_meta) {
-      ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
-      munmap(ipc_meta, sizeof(IPCMetadata));
-    }
+    cleanup_failed_import();
     throw CudaError(__FILE__, __LINE__, "cuMemMap", r);
   }
+  mapped = true;
 
   int device_id = 0;
-  cudaGetDevice(&device_id);
+  cudaError_t rt = cudaGetDevice(&device_id);
+  if (rt != cudaSuccess) {
+    cleanup_failed_import();
+    throw CudaError(__FILE__, __LINE__, "cudaGetDevice", rt);
+  }
   CUmemAccessDesc access = {};
   access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   access.location.id = device_id;
   access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
   r = cuMemSetAccess(va, size, &access, 1);
   if (r != CUDA_SUCCESS) {
-    cuMemUnmap(va, size);
-    cuMemAddressFree(va, size);
-    cuMemRelease(handle);
-    if (ipc_meta) {
-      ipc_meta->refcount.fetch_sub(1, std::memory_order_release);
-      munmap(ipc_meta, sizeof(IPCMetadata));
-    }
+    cleanup_failed_import();
     throw CudaError(__FILE__, __LINE__, "cuMemSetAccess", r);
   }
 

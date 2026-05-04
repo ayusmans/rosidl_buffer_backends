@@ -18,7 +18,8 @@ import unittest
 
 from launch import LaunchDescription
 from launch.actions import SetEnvironmentVariable
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 import launch_testing
 import launch_testing.actions
 import launch_testing.asserts
@@ -31,70 +32,112 @@ from std_msgs.msg import Bool, UInt32
 @pytest.mark.launch_test
 @launch_testing.markers.keep_alive
 def generate_test_description():
-    publisher_node = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_publisher_node',
-        name='cuda_image_publisher',
+    publisher_container = ComposableNodeContainer(
+        name='cuda_image_publisher_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImagePublisher',
+                name='cuda_image_publisher',
+                parameters=[{
+                    'max_publish_count': 20,
+                    'publish_rate_ms': 100,
+                    'image_width': 64,
+                    'image_height': 64,
+                }],
+            ),
+        ],
         output='screen',
-        parameters=[{
-            'max_publish_count': 20,
-            'publish_rate_ms': 100,
-            'image_width': 64,
-            'image_height': 64,
-        }],
     )
 
-    relay_node_1 = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_gpu_relay_node',
-        name='cuda_image_gpu_relay_1',
+    relay1_container = ComposableNodeContainer(
+        name='cuda_image_gpu_relay_1_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageGpuRelay',
+                name='cuda_image_gpu_relay_1',
+                parameters=[{
+                    'input_topic': 'test_cuda_image',
+                    'output_topic': 'relay_1_out',
+                }],
+            ),
+        ],
         output='screen',
-        parameters=[{
-            'input_topic': 'test_cuda_image',
-            'output_topic': 'relay_1_out',
-        }],
     )
 
-    relay_node_2 = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_gpu_relay_node',
-        name='cuda_image_gpu_relay_2',
+    relay2_container = ComposableNodeContainer(
+        name='cuda_image_gpu_relay_2_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageGpuRelay',
+                name='cuda_image_gpu_relay_2',
+                parameters=[{
+                    'input_topic': 'relay_1_out',
+                    'output_topic': 'relay_2_out',
+                }],
+            ),
+        ],
         output='screen',
-        parameters=[{
-            'input_topic': 'relay_1_out',
-            'output_topic': 'relay_2_out',
-        }],
     )
 
-    relay_node_3 = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_gpu_relay_node',
-        name='cuda_image_gpu_relay_3',
+    relay3_container = ComposableNodeContainer(
+        name='cuda_image_gpu_relay_3_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageGpuRelay',
+                name='cuda_image_gpu_relay_3',
+                parameters=[{
+                    'input_topic': 'relay_2_out',
+                    'output_topic': 'relay_3_out',
+                }],
+            ),
+        ],
         output='screen',
-        parameters=[{
-            'input_topic': 'relay_2_out',
-            'output_topic': 'relay_3_out',
-        }],
     )
 
-    subscriber_node = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_subscriber_node',
-        name='cuda_image_subscriber',
+    subscriber_container = ComposableNodeContainer(
+        name='cuda_image_subscriber_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageSubscriber',
+                name='cuda_image_subscriber',
+                parameters=[{
+                    'expected_backend': 'cuda',
+                }],
+                remappings=[
+                    ('test_cuda_image', 'relay_3_out'),
+                ],
+            ),
+        ],
         output='screen',
-        remappings=[('test_cuda_image', 'relay_3_out')],
-        parameters=[{
-            'expected_backend': 'cuda',
-        }],
     )
 
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
-        publisher_node,
-        relay_node_1,
-        relay_node_2,
-        relay_node_3,
-        subscriber_node,
+        publisher_container,
+        relay1_container,
+        relay2_container,
+        relay3_container,
+        subscriber_container,
         launch_testing.actions.ReadyToTest(),
     ])
 

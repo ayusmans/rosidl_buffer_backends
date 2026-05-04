@@ -18,7 +18,7 @@ import unittest
 
 from launch import LaunchDescription
 from launch.actions import SetEnvironmentVariable, TimerAction
-from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 import launch_testing
 import launch_testing.actions
@@ -49,31 +49,39 @@ def generate_test_description():
                 package='cuda_buffer_backend',
                 plugin='CudaImageSubscriber',
                 name='cuda_image_subscriber_intra',
-                extra_arguments=[{'use_intra_process_comms': True}],
                 remappings=[
                     ('subscriber_count', 'intra_subscriber_count'),
                     ('validation_result', 'intra_validation_result'),
+                ],
+                extra_arguments=[{'use_intra_process_comms': True}],
+            ),
+        ],
+        output='screen',
+    )
+
+    subscriber_inter_container = ComposableNodeContainer(
+        name='cuda_image_subscriber_inter_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageSubscriber',
+                name='cuda_image_subscriber_inter',
+                parameters=[{}],
+                remappings=[
+                    ('subscriber_count', 'inter_subscriber_count'),
+                    ('validation_result', 'inter_validation_result'),
                 ],
             ),
         ],
         output='screen',
     )
 
-    subscriber_inter_node = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_subscriber_node',
-        name='cuda_image_subscriber_inter',
-        output='screen',
-        parameters=[],
-        remappings=[
-            ('subscriber_count', 'inter_subscriber_count'),
-            ('validation_result', 'inter_validation_result'),
-        ],
-    )
-
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
-        subscriber_inter_node,
+        subscriber_inter_container,
         TimerAction(period=2.0, actions=[
             container,
             launch_testing.actions.ReadyToTest(),

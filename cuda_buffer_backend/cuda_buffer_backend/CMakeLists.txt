@@ -119,15 +119,8 @@ if(BUILD_TESTING)
     ${std_msgs_TARGETS}
     rosidl_runtime_cpp::rosidl_runtime_cpp
   )
-  rclcpp_components_register_node(cuda_image_publisher_component
-    PLUGIN "CudaImagePublisher"
-    EXECUTABLE cuda_image_publisher_node
-  )
-  install(TARGETS cuda_image_publisher_component
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-  )
+  rclcpp_components_register_nodes(cuda_image_publisher_component
+    "CudaImagePublisher")
 
   add_library(cuda_image_subscriber_component SHARED
     test/src/cuda_image_subscriber_node.cpp
@@ -141,15 +134,8 @@ if(BUILD_TESTING)
     ${std_msgs_TARGETS}
     rosidl_runtime_cpp::rosidl_runtime_cpp
   )
-  rclcpp_components_register_node(cuda_image_subscriber_component
-    PLUGIN "CudaImageSubscriber"
-    EXECUTABLE cuda_image_subscriber_node
-  )
-  install(TARGETS cuda_image_subscriber_component
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-  )
+  rclcpp_components_register_nodes(cuda_image_subscriber_component
+    "CudaImageSubscriber")
 
   add_library(cuda_image_gpu_relay_component SHARED
     test/src/cuda_image_gpu_relay_node.cpp
@@ -163,15 +149,8 @@ if(BUILD_TESTING)
     ${std_msgs_TARGETS}
     rosidl_runtime_cpp::rosidl_runtime_cpp
   )
-  rclcpp_components_register_node(cuda_image_gpu_relay_component
-    PLUGIN "CudaImageGpuRelay"
-    EXECUTABLE cuda_image_gpu_relay_node
-  )
-  install(TARGETS cuda_image_gpu_relay_component
-    ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
-  )
+  rclcpp_components_register_nodes(cuda_image_gpu_relay_component
+    "CudaImageGpuRelay")
 
   add_launch_test(test/test_cuda_image_inter_pubsub_fastrtps_launch.py
     TARGET test_cuda_image_inter_pubsub_fastrtps_launch

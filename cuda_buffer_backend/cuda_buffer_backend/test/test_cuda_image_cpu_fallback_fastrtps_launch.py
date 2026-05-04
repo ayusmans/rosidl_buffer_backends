@@ -13,14 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import time
 import unittest
 
-from ament_index_python.packages import get_package_prefix
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, SetEnvironmentVariable, TimerAction
-from launch_ros.actions import Node
+from launch.actions import SetEnvironmentVariable, TimerAction
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 import launch_testing
 import launch_testing.actions
 import launch_testing.asserts
@@ -30,26 +29,31 @@ import rclpy
 from std_msgs.msg import Bool, Float64, UInt32
 
 
-def _make_fallback_subscriber(name, env_override, remapping_prefix):
-    """Create a subscriber ExecuteProcess with env var override for fallback testing."""
-    sub_executable = os.path.join(
-        get_package_prefix('cuda_buffer_backend'), 'lib',
-        'cuda_buffer_backend', 'cuda_image_subscriber_node')
-    return ExecuteProcess(
-        cmd=[
-            'env', env_override,
-            'RMW_IMPLEMENTATION=rmw_fastrtps_cpp',
-            sub_executable,
-            '--ros-args',
-            '-r', f'__node:={name}',
-            '-p', 'expected_backend:=cpu',
-            '-r', f'subscriber_count:={remapping_prefix}_count',
-            '-r', f'validation_result:={remapping_prefix}_validation',
-            '-r', f'backend_validation:={remapping_prefix}_backend_validation',
-            '-r', f'latency_ms:={remapping_prefix}_latency',
+def _make_fallback_subscriber(name, env_name, env_value, remapping_prefix):
+    """Create a subscriber component container with env override for fallback testing."""
+    return ComposableNodeContainer(
+        name=f'{name}_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageSubscriber',
+                name=f'{name}',
+                parameters=[{
+                    'expected_backend': 'cpu',
+                }],
+                remappings=[
+                    ('subscriber_count', f'{remapping_prefix}_count'),
+                    ('validation_result', f'{remapping_prefix}_validation'),
+                    ('backend_validation', f'{remapping_prefix}_backend_validation'),
+                    ('latency_ms', f'{remapping_prefix}_latency'),
+                ],
+            ),
         ],
-        name=name,
         output='screen',
+        additional_env={env_name: env_value, 'RMW_IMPLEMENTATION': 'rmw_fastrtps_cpp'},
     )
 
 
@@ -57,40 +61,55 @@ def _make_fallback_subscriber(name, env_override, remapping_prefix):
 @launch_testing.markers.keep_alive
 def generate_test_description():
     """Generate launch description for CPU fallback test over FastRTPS."""
-    publisher_node = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_publisher_node',
-        name='cuda_image_publisher',
+    publisher_container = ComposableNodeContainer(
+        name='cuda_image_publisher_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImagePublisher',
+                name='cuda_image_publisher',
+                parameters=[{
+                    'max_publish_count': 0,
+                    'publish_rate_ms': 100,
+                    'image_width': 1920,
+                    'image_height': 1080,
+                }],
+            ),
+        ],
         output='screen',
-        parameters=[{
-            'max_publish_count': 0,
-            'publish_rate_ms': 100,
-            'image_width': 1920,
-            'image_height': 1080,
-        }],
     )
 
-    ipc_subscriber = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_subscriber_node',
-        name='ipc_subscriber',
-        output='screen',
-        parameters=[{
-            'expected_backend': 'cuda',
-        }],
-        remappings=[
-            ('subscriber_count', 'ipc_count'),
-            ('validation_result', 'ipc_validation'),
-            ('backend_validation', 'ipc_backend_validation'),
-            ('latency_ms', 'ipc_latency'),
+    ipc_subscriber = ComposableNodeContainer(
+        name='ipc_subscriber_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageSubscriber',
+                name='ipc_subscriber',
+                parameters=[{
+                    'expected_backend': 'cuda',
+                }],
+                remappings=[
+                    ('subscriber_count', 'ipc_count'),
+                    ('validation_result', 'ipc_validation'),
+                    ('backend_validation', 'ipc_backend_validation'),
+                    ('latency_ms', 'ipc_latency'),
+                ],
+            ),
         ],
+        output='screen',
     )
 
     cross_device_sub = _make_fallback_subscriber(
-        'cross_device_sub', 'CUDA_BUFFER_DEVICE_ID_OVERRIDE=999', 'cross_device')
-
+        'cross_device_sub', 'CUDA_BUFFER_DEVICE_ID_OVERRIDE', '999', 'cross_device')
     cross_user_sub = _make_fallback_subscriber(
-        'cross_user_sub', 'CUDA_BUFFER_UID_OVERRIDE=99999', 'cross_user')
+        'cross_user_sub', 'CUDA_BUFFER_UID_OVERRIDE', '99999', 'cross_user')
 
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
@@ -98,7 +117,7 @@ def generate_test_description():
         cross_device_sub,
         cross_user_sub,
         TimerAction(period=2.0, actions=[
-            publisher_node,
+            publisher_container,
             launch_testing.actions.ReadyToTest(),
         ]),
     ])

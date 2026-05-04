@@ -18,7 +18,8 @@ import unittest
 
 from launch import LaunchDescription
 from launch.actions import SetEnvironmentVariable
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 import launch_testing
 import launch_testing.actions
 import launch_testing.asserts
@@ -32,35 +33,49 @@ from std_msgs.msg import Bool, Float64, UInt32
 @launch_testing.markers.keep_alive
 def generate_test_description():
     """Generate launch description for CUDA image pub/sub test with FastRTPS RMW."""
-    publisher_node = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_publisher_node',
-        name='cuda_image_publisher',
+    publisher_container = ComposableNodeContainer(
+        name='cuda_image_publisher_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImagePublisher',
+                name='cuda_image_publisher',
+                parameters=[{
+                    'max_publish_count': 0,
+                    'publish_rate_ms': 100,
+                    'image_width': 1920,
+                    'image_height': 1080,
+                }],
+            ),
+        ],
         output='screen',
-        parameters=[{
-            'max_publish_count': 0,
-            'publish_rate_ms': 100,
-            'image_width': 1920,
-            'image_height': 1080,
-        }],
-        arguments=['--ros-args', '--log-level', 'debug'],
     )
 
-    subscriber_node = Node(
-        package='cuda_buffer_backend',
-        executable='cuda_image_subscriber_node',
-        name='cuda_image_subscriber',
+    subscriber_container = ComposableNodeContainer(
+        name='cuda_image_subscriber_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='cuda_buffer_backend',
+                plugin='CudaImageSubscriber',
+                name='cuda_image_subscriber',
+                parameters=[{
+                    'expected_backend': 'cuda',
+                }],
+            ),
+        ],
         output='screen',
-        parameters=[{
-            'expected_backend': 'cuda',
-        }],
-        arguments=['--ros-args', '--log-level', 'debug'],
     )
 
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
-        publisher_node,
-        subscriber_node,
+        publisher_container,
+        subscriber_container,
         launch_testing.actions.ReadyToTest(),
     ])
 
