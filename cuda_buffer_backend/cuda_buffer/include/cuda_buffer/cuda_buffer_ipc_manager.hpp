@@ -29,7 +29,13 @@ namespace cuda_buffer_backend
 struct VmmBlock;
 struct IPCMetadata;
 
-/// \brief Manages VMM IPC: exports FDs on publish, imports/maps/caches on subscribe.
+/// \brief VMM IPC transport helper used by CudaMemoryPool and the backend plugin.
+///
+/// On the publisher side, CudaMemoryPool registers VMM blocks here so their
+/// exported file descriptors can be served over Unix-domain sockets. On the
+/// subscriber side, import_block() receives the FD, maps the VMM block into
+/// the local process, validates the block UID, increments IPCMetadata::refcount,
+/// and caches imports by (publisher pid, block id).
 class CudaVmmIPCManager
 {
 public:

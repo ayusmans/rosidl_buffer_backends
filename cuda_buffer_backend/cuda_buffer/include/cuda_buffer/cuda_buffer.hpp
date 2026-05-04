@@ -30,7 +30,13 @@
 namespace cuda_buffer_backend
 {
 
-/// \brief GPU memory buffer with event-based synchronization via ReadHandle/WriteHandle.
+/// \brief Internal CUDA storage object owned by CudaBufferImpl.
+///
+/// The public rosidl buffer hierarchy is:
+///   rosidl::Buffer<T> -> rosidl::BufferImplBase<T> -> CudaBufferImpl<T>.
+/// CudaBuffer is not part of that hierarchy. It is the
+/// low-level RAII holder for the CUDA device pointer, device id, write/read
+/// event state, and deferred recycler used by CudaBufferImpl.
 class CudaBuffer
 {
 public:

@@ -54,7 +54,12 @@ struct HandleState
   cudaStream_t write_stream{nullptr};
 };
 
-/// \brief RAII read handle; waits on write event, records read event on destroy.
+/// \brief Scoped read access to a CudaBuffer.
+///
+/// ReadHandle is created by CudaBuffer::get_read_handle(). It waits on the
+/// producer write event before exposing a const device pointer, then records a
+/// read event on destruction. CudaBuffer's recycler later waits on those read
+/// events before releasing or reusing the underlying storage.
 /// Must not outlive the CudaBuffer that created it.
 class ReadHandle
 {
@@ -148,7 +153,12 @@ private:
   std::shared_ptr<rosidl::Buffer<uint8_t>> promoted_buffer_{};
 };
 
-/// \brief RAII write handle; destructor records write event on stream.
+/// \brief Scoped write access to a CudaBuffer.
+///
+/// WriteHandle is created by CudaBuffer::get_write_handle(). It exposes a
+/// mutable device pointer and records the producer write event on destruction,
+/// making later ReadHandles wait for the correct CUDA stream work. Only one
+/// write handle may be active for a buffer.
 /// Must not outlive the CudaBuffer that created it.
 class WriteHandle
 {

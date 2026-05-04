@@ -58,7 +58,13 @@ struct VmmBlock
   uint64_t current_uid{0};
 };
 
-/// \brief VMM-backed CUDA memory pool with free-list caching and per-block IPC export.
+/// \brief Publisher-side VMM allocation pool used by CudaBufferImpl.
+///
+/// CudaMemoryPool owns the real CUDA VMM allocations. CudaBuffer instances
+/// represent temporary uses of blocks from this pool and return blocks via the
+/// deleter produced by CudaMemoryPool::deleter(). The pool decides whether a
+/// returned block is ready for reuse by checking per-block IPC metadata
+/// (subscriber refcount, UID, and publish grace window).
 class CudaMemoryPool : public std::enable_shared_from_this<CudaMemoryPool>
 {
 public:

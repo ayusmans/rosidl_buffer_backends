@@ -24,12 +24,30 @@
 #include <cerrno>
 #include <chrono>
 #include <string>
+#include <thread>
 
 namespace cuda_buffer_backend
 {
 
 CudaMemoryPool::~CudaMemoryPool()
 {
+  for (;;) {
+    bool all_ready = true;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (auto & block : all_blocks_) {
+        if (!is_block_ready(block.get())) {
+          all_ready = false;
+          break;
+        }
+      }
+    }
+    if (all_ready) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto & block : all_blocks_) {
     if (block->ipc_meta) {

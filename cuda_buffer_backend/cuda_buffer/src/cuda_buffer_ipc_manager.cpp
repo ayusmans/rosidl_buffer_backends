@@ -373,16 +373,12 @@ void CudaVmmIPCManager::FDDispatcher::handle_client(int server_socket, int fd_to
 std::shared_ptr<CudaVmmIPCManager::FDDispatcher>
 CudaVmmIPCManager::get_dispatcher()
 {
-  static std::weak_ptr<FDDispatcher> weak_dispatcher;
-  static std::mutex dispatcher_mutex;
-
-  std::lock_guard<std::mutex> lock(dispatcher_mutex);
-  auto sp = weak_dispatcher.lock();
-  if (!sp) {
-    sp = std::make_shared<FDDispatcher>();
-    weak_dispatcher = sp;
-  }
-  return sp;
+  // Process-lifetime FD dispatcher. It owns a worker thread and should not
+  // be torn down during static destruction while subscribers may still be
+  // importing VMM handles.
+  static auto * dispatcher = new std::shared_ptr<FDDispatcher>(
+    new FDDispatcher());
+  return *dispatcher;
 }
 
 CudaVmmIPCManager::CudaVmmIPCManager()
