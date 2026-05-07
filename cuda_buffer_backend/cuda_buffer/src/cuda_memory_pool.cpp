@@ -31,7 +31,7 @@ namespace cuda_buffer_backend
 
 CudaMemoryPool::~CudaMemoryPool()
 {
-  for (;;) {
+  for (;; ) {
     bool all_ready = true;
     {
       std::lock_guard<std::mutex> lock(mutex_);

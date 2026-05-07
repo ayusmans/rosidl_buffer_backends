@@ -32,12 +32,13 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string>
 
 namespace host_endpoint_manager
 {
 
-static std::optional<long> parse_override_int_env(
-  const char * name, long min, long max)
+static std::optional<int64_t> parse_override_int_env(
+  const char * name, int64_t min, int64_t max)
 {
   const char * value = std::getenv(name);
   if (value == nullptr || *value == '\0') {
@@ -45,14 +46,14 @@ static std::optional<long> parse_override_int_env(
   }
   char * end = nullptr;
   errno = 0;
-  const long parsed = std::strtol(value, &end, 10);
+  const int64_t parsed = std::strtoll(value, &end, 10);
   if (errno != 0 || end == value || *end != '\0' ||
     parsed < min || parsed > max)
   {
     RCUTILS_LOG_WARN_NAMED(
       "host_endpoint_manager",
-      "Invalid value for %s='%s' (expected integer in [%ld, %ld]); ignoring",
-      name, value, min, max);
+      "Invalid value for %s='%s' (expected integer in [%s, %s]); ignoring",
+      name, value, std::to_string(min).c_str(), std::to_string(max).c_str());
     return std::nullopt;
   }
   return parsed;
@@ -174,7 +175,7 @@ HostEndpointManager::HostEndpointManager(size_t domain_id)
   }
 
   // Env-var names for testing IPC fallback paths without requiring multiple
-  // GPUs or users. 
+  // GPUs or users.
   // Not intended for production configuration — use only from test launches.
   constexpr const char * kDeviceIdOverrideEnv = "CUDA_BUFFER_DEVICE_ID_OVERRIDE";
   constexpr const char * kUidOverrideEnv = "CUDA_BUFFER_UID_OVERRIDE";
