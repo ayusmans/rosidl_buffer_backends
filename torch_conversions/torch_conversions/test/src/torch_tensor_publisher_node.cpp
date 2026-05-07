@@ -15,6 +15,8 @@
 #include <torch/torch.h>
 #include <chrono>
 #include <memory>
+#include <string>
+#include <utility>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
@@ -63,15 +65,16 @@ private:
 
     torch_conversions::StreamGuard guard = torch_conversions::set_stream();
 
-    tensor_msgs::msg::ExperimentalTensor msg = torch_conversions::allocate_tensor_msg(
+    auto msg = torch_conversions::allocate_tensor_msg(
       {tensor_height_, tensor_width_, 3}, torch::kByte);
 
     {
-      at::Tensor output = torch_conversions::from_output_tensor_msg(msg);
+      at::Tensor output = torch_conversions::from_output_tensor_msg(*msg);
       output.fill_(static_cast<int>(count_ % 256));
     }
 
-    publisher_->publish(msg);
+    const std::string backend_type = msg->data.get_backend_type();
+    publisher_->publish(std::move(msg));
 
     std_msgs::msg::UInt32 count_msg;
     count_msg.data = ++count_;
@@ -81,7 +84,7 @@ private:
       RCLCPP_INFO(
         this->get_logger(),
         "Published %zu torch tensors (data backend: %s)",
-        count_, msg.data.get_backend_type().c_str());
+        count_, backend_type.c_str());
     }
   }
 

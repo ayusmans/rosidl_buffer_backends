@@ -72,12 +72,13 @@ auto msg = torch_conversions::allocate_tensor_msg(
   /*shape=*/{1080, 1920, 3}, torch::kUInt8);
 
 // Wrap as at::Tensor without copying and write into it.
-at::Tensor t_out = torch_conversions::from_output_tensor_msg(msg);
+at::Tensor t_out = torch_conversions::from_output_tensor_msg(*msg);
 my_pipeline(t_out);
+publisher->publish(std::move(msg));
 
 // Subscriber: independent tensor by default.
 auto guard = torch_conversions::set_stream();
-at::Tensor t_in = torch_conversions::from_input_tensor_msg(msg);
+at::Tensor t_in = torch_conversions::from_input_tensor_msg(*received_msg);
 ```
 
 The message schema carries DLPack's dtype / shape / stride / offset

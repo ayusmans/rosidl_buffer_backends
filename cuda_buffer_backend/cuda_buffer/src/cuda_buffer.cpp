@@ -29,13 +29,13 @@ class CudaBuffer::BufferRecycler
 {
 public:
   // Process-lifetime CUDA cleanup service. Intentionally allocated with
-  // new so its worker thread is not torn down during static destruction,
-  // when the CUDA runtime/driver may already be unloading.
+  // a no-op deleter so its worker thread is not torn down during static
+  // destruction, when the CUDA runtime/driver may already be unloading.
   static std::shared_ptr<BufferRecycler> get_instance()
   {
-    static auto * recycler = new std::shared_ptr<BufferRecycler>(
-      new BufferRecycler());
-    return *recycler;
+    static const std::shared_ptr<BufferRecycler> recycler(
+      new BufferRecycler(), [](BufferRecycler *) {});
+    return recycler;
   }
 
   ~BufferRecycler()

@@ -477,7 +477,7 @@ inline StreamGuard set_stream() {return StreamGuard();}
 /// exactly to hold `prod(shape) * dtype.bytesize` bytes and `byte_offset` is
 /// left at zero; callers needing a view into larger storage can post-size
 /// `msg.data` and set `byte_offset` manually.
-inline TensorMsg allocate_tensor_msg(
+inline std::unique_ptr<TensorMsg> allocate_tensor_msg(
   const std::vector<int64_t> & shape,
   at::ScalarType dtype,
   std::optional<c10::DeviceType> device = std::nullopt)
@@ -487,23 +487,23 @@ inline TensorMsg allocate_tensor_msg(
   int64_t numel = detail::numel_of(shape);
   size_t byte_count = static_cast<size_t>(numel) * detail::dl_dtype_bytesize(dl);
 
-  TensorMsg msg;
-  detail::set_dtype(msg, dl);
-  msg.shape.assign(shape.begin(), shape.end());
+  auto msg = std::make_unique<TensorMsg>();
+  detail::set_dtype(*msg, dl);
+  msg->shape.assign(shape.begin(), shape.end());
   auto strides = detail::contiguous_strides(shape);
-  msg.strides.assign(strides.begin(), strides.end());
-  msg.byte_offset = 0;
+  msg->strides.assign(strides.begin(), strides.end());
+  msg->byte_offset = 0;
 
 #ifdef TORCH_CONVERSIONS_HAS_CUDA
   if (dev == c10::kCUDA) {
     auto cuda_impl =
       std::make_unique<cuda_buffer_backend::CudaBufferImpl<uint8_t>>(byte_count);
-    msg.data = rosidl::Buffer<uint8_t>(std::move(cuda_impl));
+    msg->data = rosidl::Buffer<uint8_t>(std::move(cuda_impl));
     return msg;
   }
 #endif
   if (dev == c10::kCPU) {
-    msg.data.resize(byte_count);
+    msg->data.resize(byte_count);
     return msg;
   }
   throw std::runtime_error(
@@ -584,6 +584,21 @@ inline void to_tensor_msg(TensorMsg & msg, const at::Tensor & tensor)
   }
 
   detail::populate_metadata_from_tensor(msg, contig);
+}
+
+/// Allocate a TensorMsg for `tensor`, copy the tensor contents into it, and
+/// populate shape / strides / dtype metadata.
+inline std::unique_ptr<TensorMsg> to_tensor_msg(const at::Tensor & tensor)
+{
+  if (!tensor.defined() || tensor.numel() == 0) {
+    return std::make_unique<TensorMsg>();
+  }
+  at::Tensor contig = tensor.contiguous();
+  std::vector<int64_t> shape(contig.sizes().begin(), contig.sizes().end());
+  auto msg = allocate_tensor_msg(
+    shape, contig.scalar_type(), contig.device().type());
+  to_tensor_msg(*msg, contig);
+  return msg;
 }
 
 }  // namespace torch_conversions

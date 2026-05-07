@@ -80,7 +80,7 @@ private:
     if (msg_valid && !msg->data.empty()) {
       torch_conversions::StreamGuard guard = torch_conversions::set_stream();
       at::Tensor tensor = torch_conversions::from_input_tensor_msg(
-        *static_cast<const tensor_msgs::msg::ExperimentalTensor *>(msg.get()),
+        *msg,
         /*clone=*/true);
 
       at::Tensor cpu_tensor = tensor.contiguous().cpu();

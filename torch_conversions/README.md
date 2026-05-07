@@ -82,11 +82,11 @@ void timer_cb()
 
   {
     // Output path: writable tensor view that aliases msg.data.
-    at::Tensor t = torch_conversions::from_output_tensor_msg(msg);
+    at::Tensor t = torch_conversions::from_output_tensor_msg(*msg);
     render_pipeline(t);
   }
 
-  publisher_->publish(msg);
+  publisher_->publish(std::move(msg));
 }
 ```
 
@@ -112,15 +112,14 @@ void cb(const tensor_msgs::msg::ExperimentalTensor::SharedPtr msg)
 ```cpp
 at::Tensor t = compute_something().contiguous();
 
-std::vector<int64_t> shape(t.sizes().begin(), t.sizes().end());
-// Pre-allocate storage, then copy the tensor into it and update metadata.
-auto msg = torch_conversions::allocate_tensor_msg(shape, t.scalar_type());
-torch_conversions::to_tensor_msg(msg, t);
-publisher_->publish(msg);
+// Allocates a Tensor message, copies tensor data, and fills metadata.
+auto msg = torch_conversions::to_tensor_msg(t);
+publisher_->publish(std::move(msg));
 ```
 
-`to_tensor_msg` copies tensor data into the pre-sized `msg.data` buffer and
-updates shape / strides / dtype metadata to match `t`.
+`to_tensor_msg(t)` allocates a message, copies tensor data into `msg.data`,
+and updates shape / strides / dtype metadata to match `t`. Use
+`to_tensor_msg(*msg, t)` when you want to reuse a pre-sized message buffer.
 
 ## License
 
