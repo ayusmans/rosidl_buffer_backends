@@ -190,7 +190,8 @@ private:
     cudaError_t ev_err = cudaEventCreateWithFlags(&ev, CUDA_BUFFER_EVENT_FLAGS);
     if (ev_err != cudaSuccess) {
       (void)cudaGetLastError();
-      ev_err = cudaEventCreateWithFlags(&ev, cudaEventDisableTiming);
+      ev_err = cudaEventCreateWithFlags(
+        &ev, cudaEventBlockingSync | cudaEventDisableTiming);
       if (ev_err != cudaSuccess) {
         ev = nullptr;
         (void)cudaGetLastError();
