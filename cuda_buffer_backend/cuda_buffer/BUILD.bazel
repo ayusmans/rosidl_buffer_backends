@@ -12,6 +12,7 @@ cc_library(
     includes = ["include"],
     linkopts = ["-lrt"],
     deps = [
+        "@cuda//:cuda",
         "@ros2packages//rcutils:cc_lib",
         "@ros2packages//rmw:cc_lib",
         "@ros2packages//rosidl-buffer:cc_lib",
