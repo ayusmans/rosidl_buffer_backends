@@ -1,0 +1,23 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "cuda_buffer",
+    srcs = [
+        "src/cuda_buffer.cpp",
+        "src/cuda_buffer_ipc_manager.cpp",
+        "src/cuda_memory_pool.cpp",
+        "src/host_endpoint_manager.cpp",
+    ],
+    hdrs = glob(["include/cuda_buffer/**"]),
+    includes = ["include"],
+    linkopts = [
+        "-lcuda",
+        "-lrt",
+    ],
+    deps = [
+        "@ros2packages//rcutils:cc_lib",
+        "@ros2packages//rmw:cc_lib",
+        "@ros2packages//rosidl-buffer:cc_lib",
+        "@rules_cuda//cuda:runtime",
+    ],
+)
