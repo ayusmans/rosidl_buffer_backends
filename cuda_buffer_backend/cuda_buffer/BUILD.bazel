@@ -10,10 +10,7 @@ cc_library(
     ],
     hdrs = glob(["include/cuda_buffer/**"]),
     includes = ["include"],
-    linkopts = [
-        "-lcuda",
-        "-lrt",
-    ],
+    linkopts = ["-lrt"],
     deps = [
         "@ros2packages//rcutils:cc_lib",
         "@ros2packages//rmw:cc_lib",
