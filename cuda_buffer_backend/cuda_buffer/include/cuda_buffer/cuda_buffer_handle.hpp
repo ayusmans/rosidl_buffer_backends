@@ -31,7 +31,8 @@ namespace cuda_buffer_backend
 
 class CudaBuffer;
 
-constexpr unsigned int CUDA_BUFFER_EVENT_FLAGS = cudaEventDisableTiming | cudaEventInterprocess;
+constexpr unsigned int CUDA_BUFFER_EVENT_FLAGS =
+  cudaEventBlockingSync | cudaEventDisableTiming | cudaEventInterprocess;
 
 inline bool cuda_is_stream_usable(cudaStream_t s)
 {

@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <cstddef>
 #include <cstring>
 #include <sstream>
 #include <thread>
@@ -55,13 +56,24 @@ void check_uid_staleness(
   }
 }
 
-struct sockaddr_un make_unix_addr(const std::string & path)
+struct UnixAddress
 {
   struct sockaddr_un addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
-  return addr;
+  socklen_t length;
+};
+
+UnixAddress make_abstract_unix_addr(const std::string & name)
+{
+  UnixAddress address{};
+  if (name.empty() || name.size() > sizeof(address.addr.sun_path) - 1) {
+    throw CudaError("Invalid abstract Unix socket name");
+  }
+
+  address.addr.sun_family = AF_UNIX;
+  memcpy(address.addr.sun_path + 1, name.data(), name.size());
+  address.length = static_cast<socklen_t>(
+    offsetof(sockaddr_un, sun_path) + 1 + name.size());
+  return address;
 }
 
 }  // namespace
@@ -392,7 +404,6 @@ CudaVmmIPCManager::~CudaVmmIPCManager()
   for (auto & [id, info] : registered_blocks_) {
     if (info.server_socket >= 0 && dispatcher_) {
       dispatcher_->remove_socket(info.server_socket);
-      unlink(info.socket_path.c_str());
     }
   }
   registered_blocks_.clear();
@@ -408,7 +419,7 @@ std::string CudaVmmIPCManager::register_block(VmmBlock * block)
   }
 
   std::stringstream ss;
-  ss << "/tmp/cuda_vmm_" << getpid() << "_" << block->block_id << ".sock";
+  ss << "cuda_vmm_" << getpid() << "_" << block->block_id;
   std::string socket_path = ss.str();
 
   int server_socket = create_fd_server_socket(socket_path);
@@ -559,22 +570,21 @@ CudaVmmIPCManager::ImportResult CudaVmmIPCManager::import_block(
 
 int CudaVmmIPCManager::create_fd_server_socket(const std::string & socket_path)
 {
-  unlink(socket_path.c_str());
-
   int server_socket = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
   if (server_socket < 0) {
     return -1;
   }
 
-  auto addr = make_unix_addr(socket_path);
-  if (bind(server_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+  auto address = make_abstract_unix_addr(socket_path);
+  if (bind(
+      server_socket, reinterpret_cast<struct sockaddr *>(&address.addr), address.length) < 0)
+  {
     close(server_socket);
     return -1;
   }
 
   if (listen(server_socket, 5) < 0) {
     close(server_socket);
-    unlink(socket_path.c_str());
     return -1;
   }
 
@@ -588,8 +598,10 @@ int CudaVmmIPCManager::receive_fd_from_socket(const std::string & socket_path)
     return -1;
   }
 
-  auto addr = make_unix_addr(socket_path);
-  if (connect(client_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+  auto address = make_abstract_unix_addr(socket_path);
+  if (connect(
+      client_socket, reinterpret_cast<struct sockaddr *>(&address.addr), address.length) < 0)
+  {
     close(client_socket);
     return -1;
   }
