@@ -103,6 +103,7 @@ public:
 private:
   class BufferRecycler;
 
+  void reap_completed_read_events() const;
   void finalize_write_handle_locked() const;
   static void default_cuda_free(uint8_t * p);
 

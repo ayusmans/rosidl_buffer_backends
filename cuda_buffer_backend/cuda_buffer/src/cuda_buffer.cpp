@@ -137,6 +137,8 @@ CudaBuffer::~CudaBuffer()
 
 ReadHandle CudaBuffer::get_read_handle(cudaStream_t stream) const
 {
+  reap_completed_read_events();
+
   if (handle_state_) {
     std::lock_guard<std::mutex> lk(handle_state_->mtx);
     if (handle_state_->state == HandleState::State::InUse) {
@@ -150,6 +152,7 @@ ReadHandle CudaBuffer::get_read_handle(cudaStream_t stream) const
 
 WriteHandle CudaBuffer::get_write_handle(cudaStream_t stream)
 {
+  reap_completed_read_events();
   std::lock_guard<std::mutex> lg(events_mutex_);
 
   if (handle_state_) {
@@ -170,6 +173,26 @@ WriteHandle CudaBuffer::get_write_handle(cudaStream_t stream)
   handle_state_->state = HandleState::State::InUse;
   handle_state_->write_stream = stream;
   return WriteHandle(device_ptr_.get(), &write_event_, stream, handle_state_);
+}
+
+void CudaBuffer::reap_completed_read_events() const
+{
+  std::lock_guard<std::mutex> lock(events_mutex_);
+  auto event = read_events_.begin();
+  while (event != read_events_.end()) {
+    const cudaError_t status = cudaEventQuery(*event);
+    if (status == cudaSuccess) {
+      CUDA_CHECK_NOTHROW(cudaEventDestroy(*event), (void)0);
+      event = read_events_.erase(event);
+      continue;
+    }
+    if (status != cudaErrorNotReady) {
+      RCUTILS_LOG_WARN_NAMED(
+        "cuda_buffer_backend", "cudaEventQuery failed: %s", cudaGetErrorName(status));
+    }
+    (void)cudaGetLastError();
+    ++event;
+  }
 }
 
 void CudaBuffer::finalize_write_handle() const
