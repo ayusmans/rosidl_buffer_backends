@@ -2,12 +2,12 @@ package(default_visibility = ["//visibility:public"])
 
 cc_library(
     name = "cuda_buffer",
-    srcs = [
-        "src/cuda_buffer.cpp",
-        "src/cuda_buffer_ipc_manager.cpp",
-        "src/cuda_memory_pool.cpp",
-        "src/host_endpoint_manager.cpp",
-    ],
+    # Globbed rather than listed, because a list here rots silently. This one
+    # was written before src/cuda_buffer_impl.cpp existed and was not updated
+    # when it arrived, so `get_or_create_global_pool()` was declared in the
+    # header and compiled into nothing. A shared library tolerates that; the
+    # first consumer to link an executable does not.
+    srcs = glob(["src/*.cpp"]),
     hdrs = glob(["include/cuda_buffer/**"]),
     includes = ["include"],
     linkopts = ["-lrt"],
