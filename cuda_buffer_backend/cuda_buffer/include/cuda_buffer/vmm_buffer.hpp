@@ -33,11 +33,11 @@ namespace cuda_buffer_backend
 /// \brief CudaBuffer backed by CUDA Virtual Memory Management (VMM).
 ///
 /// VmmBuffer is the RAII holder for a CUDA device pointer together with the
-/// CUDA events that order producer and consumer streams against each other.
-/// Locally allocated buffers wrap a block of the process-wide CudaMemoryPool;
-/// buffers received from another process wrap an imported VMM mapping. In both
-/// cases the deleter decides what releasing the storage means, and a deferred
-/// recycler runs it only once all recorded stream work has completed.
+/// CUDA event that orders consumers after the producer's write. Locally
+/// allocated buffers wrap a block of the process-wide CudaMemoryPool; buffers
+/// received from another process wrap an imported VMM mapping. In both cases
+/// the deleter decides what releasing the storage means, and it runs only
+/// once all recorded stream work has completed.
 ///
 /// This header is for storage and transport code. Code that only reads or
 /// writes buffers should use the CudaBuffer interface and cuda_buffer_api.hpp.
@@ -74,12 +74,8 @@ protected:
   uint8_t * device_ptr() const noexcept override {return device_ptr_.get();}
   void wait_for_write(cudaStream_t stream) const override;
   void signal_write(cudaStream_t stream) const noexcept override;
-  void signal_read(cudaStream_t stream) const noexcept override;
-  size_t reap_completed_reads() const override;
 
 private:
-  class BufferRecycler;
-
   static void default_cuda_free(uint8_t * p);
 
   std::unique_ptr<uint8_t, std::function<void(uint8_t *)>> device_ptr_{
@@ -88,10 +84,6 @@ private:
 
   mutable cudaEvent_t write_event_{nullptr};
   bool owns_write_event_{false};
-  mutable std::vector<cudaEvent_t> read_events_;
-  mutable std::mutex events_mutex_;
-
-  std::shared_ptr<BufferRecycler> recycler_;
 };
 
 }  // namespace cuda_buffer_backend

@@ -159,6 +159,12 @@ private:
 /// and application DSOs resolve allocations through the same pool instance.
 CUDA_BUFFER_PUBLIC std::shared_ptr<CudaMemoryPool> get_or_create_global_pool();
 
+/// \brief Whether VMM blocks on the current device can be shared with another process.
+/// \details Probes the device the way CudaMemoryPool::create() does, without
+/// creating the pool or its FD dispatcher. Evaluated once per process. Never
+/// throws: no usable device means false.
+CUDA_BUFFER_PUBLIC bool vmm_ipc_supported() noexcept;
+
 }  // namespace cuda_buffer_backend
 
 #endif  // CUDA_BUFFER__CUDA_MEMORY_POOL_HPP_

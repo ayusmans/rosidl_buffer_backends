@@ -18,6 +18,7 @@
 #include <cuda_runtime.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -34,10 +35,26 @@ namespace cuda_buffer_backend
 /// caller owns the returned buffer and assigns it wherever the schema needs
 /// it (e.g. `msg.data = allocate_buffer(n)` for messages that follow the
 /// `data` convention, or an arbitrary field on other messages).
-inline rosidl::Buffer<uint8_t> allocate_buffer(size_t count)
+/// \param kind the storage backend; default_storage_kind() unless given.
+/// \throws CudaError if \p kind is not available in this process.
+inline rosidl::Buffer<uint8_t> allocate_buffer(
+  size_t count, StorageKind kind = default_storage_kind())
 {
   return rosidl::Buffer<uint8_t>(
-    std::make_unique<CudaBufferImpl<uint8_t>>(count));
+    std::make_unique<CudaBufferImpl<uint8_t>>(count, kind));
+}
+
+/// \brief The storage backend of \p buffer, or std::nullopt if it is not
+/// CUDA-backed (for example, it arrived over the CPU fallback path).
+template<typename T>
+std::optional<StorageKind> storage_kind_of(const rosidl::Buffer<T> & buffer)
+{
+  const auto * impl = dynamic_cast<const CudaBufferImpl<T> *>(buffer.get_impl());
+  if (!impl) {
+    return std::nullopt;
+  }
+  return impl->get_cuda_buffer().size() > 0 ?
+         impl->get_cuda_buffer().storage_kind() : impl->storage_kind();
 }
 
 namespace detail
@@ -46,9 +63,9 @@ namespace detail
 /// \brief Heap-allocate a fresh CUDA-backed rosidl::Buffer<uint8_t>, held via
 /// shared_ptr so it can ride along with a promoted read/write handle.
 inline std::shared_ptr<rosidl::Buffer<uint8_t>> allocate_cuda_buffer_shared(
-  size_t byte_count)
+  size_t byte_count, StorageKind kind)
 {
-  auto cuda_impl = std::make_unique<CudaBufferImpl<uint8_t>>(byte_count);
+  auto cuda_impl = std::make_unique<CudaBufferImpl<uint8_t>>(byte_count, kind);
   return std::make_shared<rosidl::Buffer<uint8_t>>(std::move(cuda_impl));
 }
 
@@ -67,10 +84,13 @@ inline CudaBufferImpl<uint8_t> * cuda_impl_of(rosidl::Buffer<uint8_t> & buffer)
 /// is returned. The promoted buffer is attached to the handle via
 /// \c WriteHandle::get_promoted_buffer() so the caller can substitute the
 /// buffer back into the message they're publishing.
+/// \param kind backend of the promoted buffer; default_storage_kind() unless
+/// given. Ignored when \p buffer is already CUDA-backed.
 template<typename T>
 WriteHandle from_output_buffer(
   rosidl::Buffer<T> & buffer,
-  cudaStream_t stream)
+  cudaStream_t stream,
+  std::optional<StorageKind> kind = std::nullopt)
 {
   auto * impl = buffer.get_impl();
   if (!impl) {
@@ -86,7 +106,8 @@ WriteHandle from_output_buffer(
   }
 
   size_t byte_count = buffer.size() * sizeof(T);
-  auto promoted = detail::allocate_cuda_buffer_shared(byte_count);
+  auto promoted = detail::allocate_cuda_buffer_shared(
+    byte_count, kind.value_or(default_storage_kind()));
   auto * promoted_impl = detail::cuda_impl_of(*promoted);
   promoted_impl->set_stream(stream);
   auto wh = promoted_impl->get_cuda_buffer().get_write_handle(stream);
@@ -99,10 +120,13 @@ WriteHandle from_output_buffer(
 /// directly. If the buffer is non-CUDA (e.g. CPU-backed), a new CUDA-backed
 /// \c rosidl::Buffer<uint8_t> is allocated, the source contents are copied
 /// host-to-device, and a read handle for the new buffer is returned.
+/// \param kind backend of the promoted buffer; default_storage_kind() unless
+/// given. Ignored when \p buffer is already CUDA-backed.
 template<typename T>
 ReadHandle from_input_buffer(
   const rosidl::Buffer<T> & buffer,
-  cudaStream_t stream)
+  cudaStream_t stream,
+  std::optional<StorageKind> kind = std::nullopt)
 {
   const auto * impl = buffer.get_impl();
   if (!impl) {
@@ -117,7 +141,8 @@ ReadHandle from_input_buffer(
   }
 
   size_t byte_count = buffer.size() * sizeof(T);
-  auto promoted = detail::allocate_cuda_buffer_shared(byte_count);
+  auto promoted = detail::allocate_cuda_buffer_shared(
+    byte_count, kind.value_or(default_storage_kind()));
   auto * promoted_impl = detail::cuda_impl_of(*promoted);
   {
     auto wh = promoted_impl->get_cuda_buffer().get_write_handle(stream);

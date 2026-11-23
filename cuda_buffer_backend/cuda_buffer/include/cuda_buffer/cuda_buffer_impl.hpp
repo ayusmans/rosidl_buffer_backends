@@ -56,21 +56,25 @@ inline cudaStream_t get_internal_stream()
 ///
 /// CudaBufferImpl is the typed, rosidl-facing view of a CudaBuffer. It is the
 /// same class for every storage backend: where the device memory comes from is
-/// decided by the CudaBuffer it owns.
+/// decided by the CudaBuffer it owns. It remembers which backend it was asked
+/// for, so resize(), clear() and clone() keep using that backend even across
+/// an empty state.
 template<typename T>
 class CudaBufferImpl : public rosidl::BufferImplBase<T>
 {
 public:
   CudaBufferImpl()
-  : size_(0), cuda_buffer_(CudaBuffer::allocate(0)) {}
+  : size_(0), kind_(default_storage_kind()), cuda_buffer_(CudaBuffer::allocate(0)) {}
 
-  explicit CudaBufferImpl(size_t size)
-  : size_(size), cuda_buffer_(CudaBuffer::allocate(size * sizeof(T))) {}
+  /// \brief Allocate \p size elements from the storage backend \p kind.
+  explicit CudaBufferImpl(size_t size, StorageKind kind = default_storage_kind())
+  : size_(size), kind_(kind), cuda_buffer_(CudaBuffer::allocate(size * sizeof(T), kind)) {}
 
   /// \brief Adopt existing storage, for example a buffer imported from another process.
   /// \details A null \p buffer yields an empty CudaBufferImpl, whatever \p size says.
   explicit CudaBufferImpl(std::unique_ptr<CudaBuffer> buffer, size_t size)
   : size_(buffer ? size : 0),
+    kind_(buffer ? buffer->storage_kind() : default_storage_kind()),
     cuda_buffer_(buffer ? std::move(buffer) : CudaBuffer::allocate(0)) {}
 
   ~CudaBufferImpl() = default;
@@ -101,7 +105,7 @@ public:
       return;
     }
 
-    std::unique_ptr<CudaBuffer> new_buffer = CudaBuffer::allocate(n * sizeof(T));
+    std::unique_ptr<CudaBuffer> new_buffer = CudaBuffer::allocate(n * sizeof(T), kind_);
 
     if (size_ > 0 && cuda_buffer_->size() > 0) {
       cudaStream_t s = stream_ ? stream_ : get_internal_stream();
@@ -145,7 +149,7 @@ public:
 
   std::unique_ptr<rosidl::BufferImplBase<T>> clone() const override
   {
-    auto copy = std::make_unique<CudaBufferImpl<T>>(size_);
+    auto copy = std::make_unique<CudaBufferImpl<T>>(size_, kind_);
 
     if (size_ > 0 && cuda_buffer_->size() > 0) {
       cudaStream_t s = stream_ ? stream_ : get_internal_stream();
@@ -159,6 +163,10 @@ public:
     return copy;
   }
 
+  /// \brief The storage backend this buffer allocates from.
+  /// \details For adopted storage, the backend of that storage.
+  StorageKind storage_kind() const {return kind_;}
+
   CudaBuffer & get_cuda_buffer() {return *cuda_buffer_;}
   const CudaBuffer & get_cuda_buffer() const {return *cuda_buffer_;}
 
@@ -171,6 +179,8 @@ public:
     return cuda_buffer_backend::get_or_create_global_pool();
   }
 
+  /// \brief Whether the VMM pool can share blocks with another process.
+  /// \details Creates the VMM pool. The plugin uses importable_storage_kinds() instead.
   static bool is_pool_ipc_capable()
   {
     // With no usable CUDA device the pool cannot be created. That is "not IPC
@@ -189,6 +199,7 @@ public:
 
 private:
   size_t size_;
+  StorageKind kind_;
   /// Never null; an empty buffer stands in when there is no storage.
   std::unique_ptr<CudaBuffer> cuda_buffer_;
   cudaStream_t stream_{nullptr};

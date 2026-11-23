@@ -16,101 +16,17 @@
 
 #include <rcutils/logging_macros.h>
 
-#include <condition_variable>
-#include <deque>
 #include <functional>
 #include <memory>
-#include <mutex>
-#include <thread>
 #include <utility>
 #include <vector>
 
 #include "cuda_buffer/cuda_error.hpp"
 #include "cuda_buffer/cuda_memory_pool.hpp"
+#include "deferred_release.hpp"
 
 namespace cuda_buffer_backend
 {
-
-// -- VmmBuffer::BufferRecycler (private nested class) --
-
-class VmmBuffer::BufferRecycler
-{
-public:
-  // Process-lifetime CUDA cleanup service. Intentionally allocated with
-  // a no-op deleter so its worker thread is not torn down during static
-  // destruction, when the CUDA runtime/driver may already be unloading.
-  static std::shared_ptr<BufferRecycler> get_instance()
-  {
-    static const std::shared_ptr<BufferRecycler> recycler(
-      new BufferRecycler(), [](BufferRecycler *) {});
-    return recycler;
-  }
-
-  ~BufferRecycler()
-  {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      running_ = false;
-    }
-    cv_.notify_all();
-    if (thread_.joinable()) {
-      thread_.join();
-    }
-  }
-
-  BufferRecycler(const BufferRecycler &) = delete;
-  BufferRecycler & operator=(const BufferRecycler &) = delete;
-
-  void enqueue(
-    std::vector<cudaEvent_t> events,
-    std::unique_ptr<uint8_t, std::function<void(uint8_t *)>> ptr)
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    queue_.push_back({std::move(events), std::move(ptr)});
-    cv_.notify_one();
-  }
-
-private:
-  struct PendingWork
-  {
-    std::vector<cudaEvent_t> events;
-    std::unique_ptr<uint8_t, std::function<void(uint8_t *)>> device_ptr;
-  };
-
-  BufferRecycler()
-  {
-    thread_ = std::thread(&BufferRecycler::run, this);
-  }
-
-  void run()
-  {
-    while (true) {
-      PendingWork work;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [this] {return !queue_.empty() || !running_;});
-        if (queue_.empty() && !running_) {break;}
-        if (queue_.empty()) {continue;}
-        work = std::move(queue_.front());
-        queue_.pop_front();
-      }
-      for (cudaEvent_t ev : work.events) {
-        if (ev) {
-          cudaEventSynchronize(ev);
-          cudaEventDestroy(ev);
-          (void)cudaGetLastError();
-        }
-      }
-      work.device_ptr.reset();
-    }
-  }
-
-  std::deque<PendingWork> queue_;
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  std::thread thread_;
-  bool running_{true};
-};
 
 // -- VmmBuffer --
 
@@ -120,29 +36,23 @@ VmmBuffer::VmmBuffer(
   void * ptr, size_t size, int device_id,
   std::function<void(uint8_t *)> custom_deleter)
 : CudaBuffer(size, device_id),
-  device_ptr_(static_cast<uint8_t *>(ptr), std::move(custom_deleter)),
-  recycler_(BufferRecycler::get_instance())
+  device_ptr_(static_cast<uint8_t *>(ptr), std::move(custom_deleter))
 {
 }
 
 VmmBuffer::~VmmBuffer()
 {
-  std::vector<cudaEvent_t> events_to_sync;
-
+  // The storage outlives the write and every read recorded against it.
+  std::vector<cudaEvent_t> events = take_read_events();
   if (owns_write_event_ && write_event_) {
-    events_to_sync.push_back(write_event_);
+    events.push_back(write_event_);
     write_event_ = nullptr;
   }
-
-  if (!read_events_.empty()) {
-    events_to_sync.insert(
-      events_to_sync.end(), read_events_.begin(), read_events_.end());
-    read_events_.clear();
+  if (events.empty()) {
+    return;
   }
-
-  if (!events_to_sync.empty() && recycler_) {
-    recycler_->enqueue(std::move(events_to_sync), std::move(device_ptr_));
-  }
+  auto storage = std::make_shared<decltype(device_ptr_)>(std::move(device_ptr_));
+  detail::release_after(std::move(events), [storage]() {storage->reset();});
 }
 
 std::unique_ptr<VmmBuffer> VmmBuffer::allocate(size_t byte_size)
@@ -197,43 +107,6 @@ void VmmBuffer::signal_write(cudaStream_t stream) const noexcept
   if (write_event_) {
     CUDA_CHECK_NOTHROW(cudaEventRecord(write_event_, stream), (void)0);
   }
-}
-
-void VmmBuffer::signal_read(cudaStream_t stream) const noexcept
-{
-  // Read events are only queried and synchronised in this process (see
-  // VmmBuffer::reap_completed_reads), never exported with
-  // cudaIpcGetEventHandle. cudaEventInterprocess is therefore not needed, and
-  // it makes the CUDA driver create a per-process /dev/shm/cuda.shm.* segment
-  // that it does not remove at process exit.
-  cudaEvent_t ev{nullptr};
-  CUDA_CHECK_NOTHROW(
-    cudaEventCreateWithFlags(&ev, CUDA_BUFFER_MINIMUM_EVENT_FLAGS),
-    return);
-  CUDA_CHECK_NOTHROW(cudaEventRecord(ev, stream), {cudaEventDestroy(ev); return;});
-  std::lock_guard<std::mutex> lg(events_mutex_);
-  read_events_.push_back(ev);
-}
-
-size_t VmmBuffer::reap_completed_reads() const
-{
-  std::lock_guard<std::mutex> lock(events_mutex_);
-  auto event = read_events_.begin();
-  while (event != read_events_.end()) {
-    const cudaError_t status = cudaEventQuery(*event);
-    if (status == cudaSuccess) {
-      CUDA_CHECK_NOTHROW(cudaEventDestroy(*event), (void)0);
-      event = read_events_.erase(event);
-      continue;
-    }
-    if (status != cudaErrorNotReady) {
-      RCUTILS_LOG_WARN_NAMED(
-        "cuda_buffer_backend", "cudaEventQuery failed: %s", cudaGetErrorName(status));
-    }
-    (void)cudaGetLastError();
-    ++event;
-  }
-  return read_events_.size();
 }
 
 void VmmBuffer::default_cuda_free(uint8_t * p)

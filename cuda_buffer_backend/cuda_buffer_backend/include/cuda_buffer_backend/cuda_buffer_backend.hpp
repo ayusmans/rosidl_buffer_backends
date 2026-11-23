@@ -15,6 +15,8 @@
 #ifndef CUDA_BUFFER_BACKEND__CUDA_BUFFER_BACKEND_HPP_
 #define CUDA_BUFFER_BACKEND__CUDA_BUFFER_BACKEND_HPP_
 
+#include <sys/types.h>
+
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -24,6 +26,7 @@
 #include <utility>
 #include <vector>
 
+#include "cuda_buffer/cuda_buffer.hpp"
 #include "cuda_buffer/cuda_buffer_impl.hpp"
 #include "cuda_buffer/host_endpoint_manager.hpp"
 #include "rosidl_buffer_backend/buffer_backend.hpp"
@@ -31,7 +34,10 @@
 namespace cuda_buffer_backend
 {
 
-/// \brief CUDA buffer backend plugin for zero-copy GPU memory sharing via VMM IPC.
+/// \brief CUDA buffer backend plugin for zero-copy GPU memory sharing.
+/// \details Every buffer carries its storage backend (CUDA VMM or NvSci), and
+/// each one is shared the way its backend allows. A subscriber that cannot
+/// import a buffer's backend gets that message over the CPU path.
 class CudaBufferBackend : public rosidl::BufferBackend
 {
 public:
@@ -71,9 +77,21 @@ public:
 private:
   std::shared_ptr<host_endpoint_manager::HostEndpointManager> get_endpoint_manager() const;
 
-  /// Whether a peer can import a CUDA descriptor from this process: it is in
-  /// this process, or on this host with the same device and uid.
-  static bool can_import_descriptor(
+  /// What can be sent to one subscriber, decided once per endpoint.
+  struct ShareDecision
+  {
+    /// Storage backends whose buffers the subscriber can import from here.
+    StorageKindMask kinds{0};
+    /// Its process.
+    pid_t pid{0};
+    /// Depth of its KEEP_LAST history, or 0 if unknown.
+    uint32_t history_depth{0};
+  };
+
+  /// The storage backends a peer can import from this process: those it is
+  /// able to import, if it is in this process, or on this host with the same
+  /// device and uid.
+  static StorageKindMask shareable_kinds(
     const host_endpoint_manager::LocalityInfo & peer,
     const host_endpoint_manager::HostEndpointManager & manager);
 
@@ -81,7 +99,7 @@ private:
   mutable std::mutex manager_mutex_;
 
   mutable std::unordered_map<
-    host_endpoint_manager::GidKey, bool,
+    host_endpoint_manager::GidKey, ShareDecision,
     host_endpoint_manager::GidKeyHash> ipc_decision_cache_;
   mutable std::mutex ipc_cache_mutex_;
 };

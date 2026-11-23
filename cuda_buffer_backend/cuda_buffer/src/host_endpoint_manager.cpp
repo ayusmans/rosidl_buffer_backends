@@ -25,8 +25,10 @@
 #include <cuda_runtime.h>
 #include <rcutils/logging_macros.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -83,8 +85,14 @@ struct EndpointEntry
   int32_t device_id;
   uint32_t uid;
   bool active;
-  bool ipc_capable;
-  uint8_t padding[2];
+  /// One bit per StorageKind the process can import. This byte used to be a
+  /// bool "ipc_capable", so an older process reads the VMM bit as true.
+  uint8_t storage_kinds;
+  /// A subscription's KEEP_LAST depth, or 0 if unknown. These bytes used to be
+  /// padding, so the layout is unchanged; an older process does not write
+  /// them, but it cannot import NvSci buffers from a newer one either, which
+  /// is all the depth is used for.
+  uint16_t history_depth;
   char topic_or_service_name[256];
 };
 
@@ -103,6 +111,13 @@ static_assert(
 static_assert(
   alignof(EndpointEntry) >= 8,
   "EndpointEntry must have at least 8-byte alignment");
+// The registry is shared with other processes: history_depth must take the
+// place of the two padding bytes that followed storage_kinds, and nothing else
+// may move.
+static_assert(
+  offsetof(EndpointEntry, history_depth) == offsetof(EndpointEntry, storage_kinds) + 1 &&
+  offsetof(EndpointEntry, topic_or_service_name) == offsetof(EndpointEntry, history_depth) + 2,
+  "EndpointEntry layout must not change");
 
 static size_t purge_dead_entries(EndpointRegistry * registry)
 {
@@ -319,21 +334,24 @@ bool HostEndpointManager::register_publisher(
   const rmw_gid_t & gid,
   const char * topic_name)
 {
-  return register_endpoint(gid, topic_name, EntityType::PUBLISHER);
+  return register_endpoint(gid, topic_name, EntityType::PUBLISHER, 0);
 }
 
 bool HostEndpointManager::register_subscription(
   const rmw_gid_t & gid,
-  const char * topic_name)
+  const char * topic_name,
+  uint32_t history_depth)
 {
-  return register_endpoint(gid, topic_name, EntityType::SUBSCRIPTION);
+  return register_endpoint(gid, topic_name, EntityType::SUBSCRIPTION, history_depth);
 }
 
 bool HostEndpointManager::register_endpoint(
   const rmw_gid_t & gid,
   const char * name,
-  EntityType type)
+  EntityType type,
+  uint32_t history_depth)
 {
+  const auto depth = static_cast<uint16_t>(std::min<uint32_t>(history_depth, UINT16_MAX));
   auto * registry = static_cast<EndpointRegistry *>(shm_ptr_);
   sem_t * sem = static_cast<sem_t *>(shm_mutex_);
 
@@ -376,7 +394,8 @@ bool HostEndpointManager::register_endpoint(
   slot->entity_type = type;
   slot->device_id = local_device_id_;
   slot->uid = local_uid_;
-  slot->ipc_capable = local_ipc_capable_;
+  slot->storage_kinds = static_cast<uint8_t>(local_storage_kinds_);
+  slot->history_depth = depth;
   slot->active = true;
   if (name != nullptr) {
     strncpy(slot->topic_or_service_name, name, 255);
@@ -395,7 +414,8 @@ bool HostEndpointManager::register_endpoint(
       type,
       local_device_id_,
       local_uid_,
-      local_ipc_capable_
+      local_storage_kinds_,
+      depth
     };
   }
 
@@ -415,7 +435,9 @@ LocalityInfo HostEndpointManager::query_endpoint_locality(const rmw_gid_t & gid)
       -1,
       0,
       false,
-      false
+      false,
+      0,
+      0
     };
   }
 
@@ -425,8 +447,10 @@ LocalityInfo HostEndpointManager::query_endpoint_locality(const rmw_gid_t & gid)
     it->second.instance_id,
     it->second.device_id,
     it->second.uid,
-    it->second.ipc_capable,
-    true
+    it->second.storage_kinds != 0,
+    true,
+    it->second.storage_kinds,
+    it->second.history_depth
   };
 }
 
@@ -459,7 +483,8 @@ void HostEndpointManager::refresh_from_remote()
       entry.entity_type,
       entry.device_id,
       entry.uid,
-      entry.ipc_capable
+      entry.storage_kinds,
+      entry.history_depth
     };
   }
 

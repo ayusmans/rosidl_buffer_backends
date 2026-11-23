@@ -13,6 +13,8 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- Reads the NvSci endpoint pool inventory; header-only. -->
+  <build_depend>nlohmann-json-dev</build_depend>
   <depend>cuda_buffer_backend_msgs</depend>
   <depend>cuda-toolkit</depend>
   <depend>rcutils</depend>

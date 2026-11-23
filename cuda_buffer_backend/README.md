@@ -1,6 +1,6 @@
 # cuda_buffer_backend
 
-CUDA buffer backend plugin for the ROS 2 Buffer system. Enables zero-copy GPU memory sharing between publishers and subscribers on the same host using CUDA VMM (Virtual Memory Management).
+CUDA buffer backend plugin for the ROS 2 Buffer system. Enables zero-copy GPU memory sharing between publishers and subscribers on the same host. Buffers are allocated from one of two storage backends, chosen per buffer: CUDA VMM (Virtual Memory Management, the default) or NvSci (NvSciBuf memory ordered by NvSciSync fences).
 
 See the [design document](docs/cuda_buffer_backend_design.md) for architecture
 and implementation details.
@@ -41,6 +41,89 @@ colcon test-result --verbose
 | `cuda_buffer_py` | Python allocation, scoped read/write handles, and copying into open write handles for rclpy or standalone use |
 | `cuda_buffer_backend` | Plugin registration via `pluginlib`, endpoint discovery, and descriptor serialization |
 | `cuda_buffer_backend_msgs` | ROS 2 message definition for `CudaBufferDescriptor` |
+| `cuda_buffer_examples` | Talker and listener that send buffers with both storage backends; see its [README](cuda_buffer_examples/README.md) |
+
+## Choosing a storage backend
+
+Every CUDA buffer is allocated from a storage backend, and keeps it for its
+lifetime, including across `resize()`, `clear()` and `clone()`:
+
+| Backend | `StorageKind` | Name | Available |
+|---|---|---|---|
+| CUDA VMM | `StorageKind::Vmm` | `"vmm"` | Any CUDA device; shared across processes where the device supports VMM IPC |
+| NvSci | `StorageKind::NvSci` | `"nvsci"` | Built when the NvSci headers and libraries are found (Jetson, or the x86 `nvsci` package). Shared within a process anywhere NvSci works; across processes also needs NvSciIpc endpoint pairs (see below) |
+
+The backend is chosen when a buffer is allocated, most specific setting first:
+
+1. Per allocation: `allocate_buffer(n, StorageKind::NvSci)`, or the optional
+   last argument of `from_output_buffer` / `from_input_buffer` for promoted
+   buffers. Throws `CudaError` if the backend is not available.
+2. Per process, from code: `set_default_storage_kind(StorageKind::NvSci)`.
+   Throws if the backend is not available.
+3. Per process, from the environment: `CUDA_BUFFER_STORAGE=nvsci`. An unknown
+   or unavailable name logs one warning and falls back to VMM.
+4. Otherwise VMM.
+
+The default is resolved on the first allocation. Several backends can be used
+in one process: each buffer is shared the way its own backend allows, and a
+subscriber that cannot import a buffer's backend receives that message over
+the CPU path. `storage_kind_of(buffer)` tells a subscriber which backend a
+received buffer uses, or `std::nullopt` if it arrived over the CPU path.
+
+```cpp
+#include "cuda_buffer/cuda_buffer_api.hpp"
+
+using cuda_buffer_backend::StorageKind;
+
+msg.data = cuda_buffer_backend::allocate_buffer(n);                      // default (VMM)
+msg.data = cuda_buffer_backend::allocate_buffer(n, StorageKind::NvSci);  // this buffer only
+
+if (cuda_buffer_backend::is_storage_available(StorageKind::NvSci)) {
+  cuda_buffer_backend::set_default_storage_kind(StorageKind::NvSci);     // later allocations
+}
+```
+
+In Python: `CudaBuffer.allocate_buffer(n, storage='nvsci')`,
+`CudaBuffer.set_default_storage('nvsci')`, `CudaBuffer.default_storage()`,
+`CudaBuffer.is_storage_available('nvsci')` and `CudaBuffer.storage_of(buffer)`.
+
+### NvSci across processes
+
+NvSci objects can only be exported to an NvSciIpc endpoint, so every pair of
+processes that share NvSci buffers needs an `INTER_PROCESS` endpoint pair.
+NvSciIpc cannot create endpoints at runtime: they are declared in
+`/etc/nvsciipc.cfg`, and an endpoint pool inventory lists those `cuda_buffer`
+may use. Processes claim pairs from it at runtime, through a host-wide region in
+shared memory, the same way Halos IPC's dynamic mode does (and with the same
+inventory format). Once per machine:
+
+1. Append
+   [`cuda_buffer_examples/config/nvsciipc_cuda_buffer.cfg`](cuda_buffer_examples/config/nvsciipc_cuda_buffer.cfg)
+   to `/etc/nvsciipc.cfg` and restart the NvSciIpc service
+   (`sudo systemctl restart nv_nvsciipc_init`, or reboot).
+2. Install the matching inventory:
+   `sudo install -D -m 644 cuda_buffer_examples/config/nvsci_endpoint_pool.json /etc/cuda_buffer/nvsci_endpoint_pool.json`
+
+Sixteen pairs serve sixteen pairs of processes at once; to add more, add them
+to both files. The pairs must not be in any other pool, such as a Halos IPC
+one. Every process on the host must use the same inventory, and it must not
+change while any of them runs: a process that finds the claim region made for
+another inventory refuses to use it and says so (stop the processes and remove
+`/dev/shm/cuda_buffer_nvsci_endpoint_pool` to start over). At startup, pairs of
+the inventory that `/etc/nvsciipc.cfg` does not declare are reported. NvSciIpc
+also needs its kernel driver (`/dev/nvsciipc`), which Jetson provides.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CUDA_BUFFER_STORAGE` | `vmm` | Default storage backend of the process |
+| `CUDA_BUFFER_NVSCI_ENDPOINT_POOL` | `/etc/cuda_buffer/nvsci_endpoint_pool.json` | Endpoint pool inventory: the NvSciIpc pairs processes may claim |
+| `CUDA_BUFFER_NVSCIIPC_CFG` | `/etc/nvsciipc.cfg` | NvSciIpc configuration the inventory is checked against |
+| `CUDA_BUFFER_NVSCI_HOLD_MS` | `2000` | How long an NvSci block stays reserved for a subscriber that neither imports it nor is known to have dropped it |
+| `CUDA_BUFFER_NVSCI_POOL_MAX_BYTES` | `0` (no limit) | NvSci pool size past which such reservations are taken back, oldest first, instead of growing the pool |
+
+A subscriber process only receives NvSci buffers allocated after the two
+processes exchanged their NvSci attributes, which happens when they discover
+each other; the first few messages to a new subscriber may take the CPU path.
 
 ## Usage
 
@@ -328,10 +411,16 @@ The RMW layer calls `on_discovering_endpoint()` for each subscriber to decide be
 
 | Condition | Path |
 |---|---|
-| Same host, same GPU, same user | Zero-copy via CUDA VMM IPC |
-| Different GPU, different user, different host, or VMM unavailable | CPU fallback via `to_cpu()` |
+| Same host, same GPU, same user, and the subscriber's process can import the buffer's storage backend | Zero-copy via that backend (CUDA VMM IPC, or NvSci over NvSciIpc) |
+| Same process, NvSci buffer | Zero-copy: the subscriber maps the publisher's block directly |
+| Different GPU, different user, different host, or the backend is not importable there | CPU fallback via `to_cpu()` |
 
-The publisher's pool checks a shared-memory refcount before recycling a block, ensuring all IPC subscribers have released their handles.
+Each process advertises the backends it can import in the host endpoint
+registry, and the decision is made per message from the buffer's backend.
+Subscriptions must accept the `cuda` backend (`acceptable_buffer_backends`)
+to receive CUDA buffers at all. Both backends' pools check a shared-memory
+refcount before recycling a block, ensuring all IPC subscribers have released
+their handles.
 
 ## License
 

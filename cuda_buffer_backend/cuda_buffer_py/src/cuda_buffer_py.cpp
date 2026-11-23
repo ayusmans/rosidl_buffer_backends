@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include <cstdint>
 #include <memory>
@@ -36,10 +37,28 @@ py::object wrap_cuda_buffer(std::unique_ptr<rosidl::Buffer<uint8_t>> buffer)
     reinterpret_cast<uintptr_t>(buffer.release()));
 }
 
-py::object allocate_python_buffer(size_t size)
+cuda_buffer_backend::StorageKind storage_from_python(const std::optional<std::string> & name)
+{
+  if (!name) {
+    return cuda_buffer_backend::default_storage_kind();
+  }
+  const auto kind = cuda_buffer_backend::parse_storage_kind(*name);
+  if (!kind) {
+    throw py::value_error(
+            "unknown CUDA buffer storage '" + *name + "' (expected 'vmm' or 'nvsci')");
+  }
+  return *kind;
+}
+
+py::object allocate_python_buffer(size_t size, const std::optional<std::string> & storage)
 {
   return wrap_cuda_buffer(std::make_unique<rosidl::Buffer<uint8_t>>(
-      cuda_buffer_backend::allocate_buffer(size)));
+      cuda_buffer_backend::allocate_buffer(size, storage_from_python(storage))));
+}
+
+py::object allocate_python_buffer(size_t size)
+{
+  return allocate_python_buffer(size, std::nullopt);
 }
 
 rosidl::Buffer<uint8_t> * buffer_from_python(const py::object & buffer)
@@ -278,8 +297,43 @@ PYBIND11_MODULE(_cuda_buffer_py, module)
     });
 
   module.def(
-    "_allocate_buffer", &allocate_python_buffer,
-    py::arg("size"));
+    "_allocate_buffer",
+    [](size_t size, std::optional<std::string> storage) {
+      return allocate_python_buffer(size, storage);
+    },
+    py::arg("size"), py::arg("storage") = py::none());
+
+  module.def(
+    "_default_storage",
+    []() {
+      return std::string(cuda_buffer_backend::to_string(
+        cuda_buffer_backend::default_storage_kind()));
+                                                      });
+
+  module.def(
+    "_set_default_storage",
+    [](const std::string & storage) {
+      cuda_buffer_backend::set_default_storage_kind(storage_from_python(storage));
+    },
+    py::arg("storage"));
+
+  module.def(
+    "_is_storage_available",
+    [](const std::string & storage) {
+      return cuda_buffer_backend::is_storage_available(storage_from_python(storage));
+    },
+    py::arg("storage"));
+
+  module.def(
+    "_storage_of",
+    [](py::object buffer) -> std::optional<std::string> {
+      const auto kind = cuda_buffer_backend::storage_kind_of(*buffer_from_python(buffer));
+      if (!kind) {
+        return std::nullopt;
+      }
+      return std::string(cuda_buffer_backend::to_string(*kind));
+    },
+    py::arg("buffer"));
 
   module.def(
     "_to_buffer",

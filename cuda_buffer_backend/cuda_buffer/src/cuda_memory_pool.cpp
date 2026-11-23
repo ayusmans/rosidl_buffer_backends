@@ -286,4 +286,48 @@ VmmBlock * CudaMemoryPool::create_block(size_t aligned_size)
   return ptr;
 }
 
+bool vmm_ipc_supported() noexcept
+{
+  static const bool supported = [] {
+      if (cuInit(0) != CUDA_SUCCESS) {
+        return false;
+      }
+      int device = 0;
+      if (cudaGetDevice(&device) != cudaSuccess) {
+        (void)cudaGetLastError();
+        return false;
+      }
+      const cudaError_t init = cudaFree(nullptr);
+      if (init != cudaSuccess && init != cudaErrorInvalidValue) {
+        (void)cudaGetLastError();
+        return false;
+      }
+      CUmemAllocationProp prop{};
+      prop.type = CU_MEM_ALLOCATION_TYPE_PINNED;
+      prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
+      prop.location.id = device;
+      prop.requestedHandleTypes = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+      size_t granularity = 0;
+      if (cuMemGetAllocationGranularity(
+          &granularity, &prop, CU_MEM_ALLOC_GRANULARITY_MINIMUM) != CUDA_SUCCESS ||
+        granularity == 0)
+      {
+        return false;
+      }
+      CUmemGenericAllocationHandle handle = 0;
+      if (cuMemCreate(&handle, granularity, &prop, 0) != CUDA_SUCCESS) {
+        return false;
+      }
+      int fd = -1;
+      const CUresult exported = cuMemExportToShareableHandle(
+        &fd, handle, CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR, 0);
+      if (fd >= 0) {
+        close(fd);
+      }
+      cuMemRelease(handle);
+      return exported == CUDA_SUCCESS;
+    }();
+  return supported;
+}
+
 }  // namespace cuda_buffer_backend

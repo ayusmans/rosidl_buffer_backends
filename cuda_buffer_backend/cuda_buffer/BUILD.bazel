@@ -1,0 +1,37 @@
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["package.xml"])
+
+filegroup(
+    name = "public_headers",
+    srcs = glob(["include/cuda_buffer/**"]),
+)
+
+cc_library(
+    name = "cuda_buffer",
+    srcs = [
+        "src/cuda_buffer.cpp",
+        "src/cuda_buffer_impl.cpp",
+        "src/cuda_buffer_ipc_manager.cpp",
+        "src/cuda_memory_pool.cpp",
+        "src/deferred_release.cpp",
+        "src/deferred_release.hpp",
+        "src/host_endpoint_manager.cpp",
+        "src/vmm_buffer.cpp",
+    ],
+    # The NvSci backend is CMake-only for now; leave its headers out so that
+    # header-only consumers do not need the NvSci headers.
+    hdrs = glob(
+        ["include/cuda_buffer/**"],
+        exclude = ["include/cuda_buffer/nvsci_*.hpp"],
+    ),
+    includes = ["include"],
+    linkopts = ["-lrt"],
+    deps = [
+        "@cuda//:cuda",
+        "@ros2packages//rcutils:cc_lib",
+        "@ros2packages//rmw:cc_lib",
+        "@ros2packages//rosidl-buffer:cc_lib",
+        "@rules_cuda//cuda:runtime",
+    ],
+)

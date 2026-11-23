@@ -17,10 +17,13 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <typeinfo>
 #include <utility>
 
@@ -33,6 +36,11 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "rcutils/logging_macros.h"
 #include "rosidl_typesupport_cpp/message_type_support.hpp"
+
+#ifdef CUDA_BUFFER_ENABLE_NVSCI
+#include "cuda_buffer/nvsci_buffer.hpp"
+#include "cuda_buffer/nvsci_runtime.hpp"
+#endif
 
 
 namespace cuda_buffer_backend
@@ -160,6 +168,66 @@ std::unique_ptr<CudaBuffer> import_vmm_buffer(
   return imported_buffer;
 }
 
+#ifdef CUDA_BUFFER_ENABLE_NVSCI
+
+// -- NvSci transport --
+//
+// The NvSci counterparts of export_vmm_buffer and import_vmm_buffer. The work
+// is in NvSciRuntime: unlike a VMM block, an NvSci object cannot be described
+// in a message for whoever reads it. It is pushed to one peer process over
+// that peer's NvSciIpc channel, and the descriptor only names it.
+
+/// \brief Fill the NvSci fields of \p descriptor for \p subscriber.
+/// \return false if \p buffer cannot be shared with that subscriber.
+bool export_nvsci_buffer(
+  const NvSciBuffer & buffer, const NvSciSubscriber & subscriber,
+  CudaBufferDescriptor & descriptor)
+{
+  NvSciExport out;
+  try {
+    if (!NvSciRuntime::get().export_buffer(buffer, subscriber, &out)) {
+      return false;
+    }
+  } catch (const std::exception & e) {
+    RCUTILS_LOG_WARN_NAMED("cuda_buffer_backend",
+      "NvSci export failed, falling back to CPU: %s", e.what());
+    return false;
+  }
+  static_assert(
+    sizeof(out.fence) == std::tuple_size<decltype(descriptor.nvsci_fence)>::value,
+    "nvsci_fence does not match NvSciSyncFenceIpcExportDescriptor");
+  descriptor.use_ipc = true;
+  descriptor.ipc_uid = out.uid;
+  descriptor.nvsci_pid = static_cast<int32_t>(out.pid);
+  descriptor.nvsci_buffer_id = out.buffer_id;
+  descriptor.nvsci_sync_channel_id = out.sync_channel_id;
+  descriptor.nvsci_has_fence = out.has_fence;
+  std::memcpy(descriptor.nvsci_fence.data(), out.fence.data(), out.fence.size());
+  descriptor.nvsci_connection = out.connection;
+  descriptor.nvsci_stream = out.stream;
+  descriptor.nvsci_seq = out.seq;
+  return true;
+}
+
+/// \brief Map the NvSci buffer named by \p descriptor.
+/// \throws std::exception if it cannot be mapped.
+std::unique_ptr<CudaBuffer> import_nvsci_buffer(const CudaBufferDescriptor & descriptor)
+{
+  NvSciExport in;
+  in.pid = static_cast<pid_t>(descriptor.nvsci_pid);
+  in.buffer_id = descriptor.nvsci_buffer_id;
+  in.uid = descriptor.ipc_uid;
+  in.sync_channel_id = descriptor.nvsci_sync_channel_id;
+  in.has_fence = descriptor.nvsci_has_fence;
+  std::memcpy(in.fence.data(), descriptor.nvsci_fence.data(), in.fence.size());
+  in.connection = descriptor.nvsci_connection;
+  in.stream = descriptor.nvsci_stream;
+  in.seq = descriptor.nvsci_seq;
+  return NvSciRuntime::get().import_buffer(in, descriptor.size * sizeof(uint8_t));
+}
+
+#endif  // CUDA_BUFFER_ENABLE_NVSCI
+
 }  // namespace
 
 CudaBufferBackend::CudaBufferBackend()
@@ -186,26 +254,35 @@ CudaBufferBackend::get_endpoint_manager() const
   if (!endpoint_manager_) {
     size_t domain_id = 0;
     endpoint_manager_ = host_endpoint_manager::HostEndpointManager::get_instance(domain_id);
-    endpoint_manager_->set_ipc_capable(CudaBufferImpl<uint8_t>::is_pool_ipc_capable());
+    endpoint_manager_->set_storage_kinds(importable_storage_kinds());
   }
 
   return endpoint_manager_;
 }
 
-bool CudaBufferBackend::can_import_descriptor(
+StorageKindMask CudaBufferBackend::shareable_kinds(
   const host_endpoint_manager::LocalityInfo & peer,
   const host_endpoint_manager::HostEndpointManager & manager)
 {
-  if (!peer.found || !peer.ipc_capable) {
-    return false;
+  if (!peer.found) {
+    return 0;
   }
   if (peer.locality == host_endpoint_manager::EndpointLocality::INTRA_PROCESS) {
-    return true;
+    // VMM goes through its IPC path even within a process. NvSci buffers are
+    // looked up in this process's pool, which needs no IPC; a process that
+    // holds an NvSci buffer has NvSci available.
+    StorageKindMask kinds = peer.storage_kinds & storage_kind_bit(StorageKind::Vmm);
+#ifdef CUDA_BUFFER_ENABLE_NVSCI
+    kinds |= storage_kind_bit(StorageKind::NvSci);
+#endif
+    return kinds;
   }
-  if (peer.locality == host_endpoint_manager::EndpointLocality::INTER_PROCESS_SAME_HOST) {
-    return peer.device_id == manager.get_device_id() && peer.uid == manager.get_uid();
+  if (peer.locality == host_endpoint_manager::EndpointLocality::INTER_PROCESS_SAME_HOST &&
+    peer.device_id == manager.get_device_id() && peer.uid == manager.get_uid())
+  {
+    return peer.storage_kinds & importable_storage_kinds();
   }
-  return false;
+  return 0;
 }
 
 void CudaBufferBackend::on_creating_endpoint(
@@ -220,7 +297,15 @@ void CudaBufferBackend::on_creating_endpoint(
   if (endpoint_info.endpoint_type == RMW_ENDPOINT_PUBLISHER) {
     manager->register_publisher(gid, endpoint_info.topic_type);
   } else if (endpoint_info.endpoint_type == RMW_ENDPOINT_SUBSCRIPTION) {
-    manager->register_subscription(gid, endpoint_info.topic_type);
+    // Publishers bound how long they keep a block for this subscription by
+    // the depth of its history. DDS does not share it in discovery, so it is
+    // shared here, if the RMW gave it.
+    const rmw_qos_profile_t & qos = endpoint_info.qos_profile;
+    const uint32_t depth =
+      qos.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST &&
+      qos.depth != RMW_QOS_POLICY_DEPTH_SYSTEM_DEFAULT ?
+      static_cast<uint32_t>(std::min<size_t>(qos.depth, UINT32_MAX)) : 0;
+    manager->register_subscription(gid, endpoint_info.topic_type, depth);
   }
 }
 
@@ -238,10 +323,6 @@ CudaBufferBackend::on_discovering_endpoint(
     return {false, {}};
   }
 
-  if (!CudaBufferImpl<uint8_t>::is_pool_ipc_capable()) {
-    return {false, {}};
-  }
-
   rmw_gid_t gid;
   gid.implementation_identifier = "";
   std::memcpy(gid.data, endpoint_info.endpoint_gid, RMW_GID_STORAGE_SIZE);
@@ -251,15 +332,29 @@ CudaBufferBackend::on_discovering_endpoint(
 
   auto locality_info = manager->query_endpoint_locality(gid);
 
-  bool is_ipc_capable = can_import_descriptor(locality_info, *manager);
+  const ShareDecision decision{
+    shareable_kinds(locality_info, *manager),
+    static_cast<pid_t>(locality_info.remote_instance_id >> 32),
+    locality_info.history_depth};
 
   if (locality_info.found) {
     std::lock_guard<std::mutex> lock(ipc_cache_mutex_);
     host_endpoint_manager::GidKey key(endpoint_info.endpoint_gid);
-    ipc_decision_cache_[key] = is_ipc_capable;
+    ipc_decision_cache_[key] = decision;
   }
 
-  return {is_ipc_capable, {}};
+#ifdef CUDA_BUFFER_ENABLE_NVSCI
+  // Open the NvSci channel now. A publisher can only allocate buffers a
+  // subscriber is able to import once it has that subscriber's attributes,
+  // so waiting for the first message would be too late.
+  if ((decision.kinds & storage_kind_bit(StorageKind::NvSci)) &&
+    locality_info.locality == host_endpoint_manager::EndpointLocality::INTER_PROCESS_SAME_HOST)
+  {
+    NvSciRuntime::get().connect_peer(decision.pid);
+  }
+#endif
+
+  return {decision.kinds != 0, {}};
 }
 
 std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
@@ -268,17 +363,16 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
 {
   host_endpoint_manager::GidKey key(endpoint_info.endpoint_gid);
 
-  bool decided = false;
+  std::optional<ShareDecision> decision;
   {
     std::lock_guard<std::mutex> lock(ipc_cache_mutex_);
     auto it = ipc_decision_cache_.find(key);
-    if (it != ipc_decision_cache_.end() && !it->second) {
-      return nullptr;
+    if (it != ipc_decision_cache_.end()) {
+      decision = it->second;
     }
-    decided = it != ipc_decision_cache_.end();
   }
 
-  if (!decided) {
+  if (!decision) {
     // The subscriber was never classified, so classify it the way
     // on_discovering_endpoint does. If it is missing from the local endpoint
     // registry it is on another host or has not registered yet; if it is
@@ -293,14 +387,17 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
     auto peer_manager = get_endpoint_manager();
     peer_manager->refresh_from_remote();
     auto peer_locality = peer_manager->query_endpoint_locality(peer);
-    bool can_import = can_import_descriptor(peer_locality, *peer_manager);
+    decision = ShareDecision{
+      shareable_kinds(peer_locality, *peer_manager),
+      static_cast<pid_t>(peer_locality.remote_instance_id >> 32),
+      peer_locality.history_depth};
     if (peer_locality.found) {
       std::lock_guard<std::mutex> lock(ipc_cache_mutex_);
-      ipc_decision_cache_[key] = can_import;
+      ipc_decision_cache_[key] = *decision;
     }
-    if (!can_import) {
-      return nullptr;
-    }
+  }
+  if (decision->kinds == 0) {
+    return nullptr;
   }
 
   auto * cuda_impl = dynamic_cast<CudaBufferImpl<uint8_t> *>(
@@ -311,6 +408,10 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
   }
 
   CudaBuffer & storage = cuda_impl->get_cuda_buffer();
+  if (!(decision->kinds & storage_kind_bit(storage.storage_kind()))) {
+    // The subscriber cannot import this backend: CPU path for this message.
+    return nullptr;
+  }
 
   auto descriptor = std::make_shared<CudaBufferDescriptor>();
 
@@ -328,6 +429,9 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
              locality.locality == host_endpoint_manager::EndpointLocality::INTRA_PROCESS;
     };
 
+  // The subscriber has no CudaBuffer to ask, so the kind travels with the descriptor.
+  descriptor->storage_kind = static_cast<uint8_t>(storage.storage_kind());
+
   // The storage backend of the buffer decides how it is shared. A backend
   // whose storage cannot be exported falls back to the CPU path. There is no
   // default case, so -Wswitch points here when a backend is added.
@@ -336,6 +440,21 @@ std::shared_ptr<void> CudaBufferBackend::create_descriptor_with_endpoint(
     case StorageKind::Vmm:
       exported = export_vmm_buffer(
         static_cast<VmmBuffer &>(storage), peer_is_same_process, *descriptor);
+      break;
+    case StorageKind::NvSci:
+#ifdef CUDA_BUFFER_ENABLE_NVSCI
+      {
+        // The RMW calls this once per descriptor it sends to the subscriber,
+        // in sending order, which the subscriber's reservations rely on.
+        NvSciSubscriber subscriber;
+        subscriber.pid = decision->pid;
+        subscriber.key.assign(
+          reinterpret_cast<const char *>(endpoint_info.endpoint_gid), RMW_GID_STORAGE_SIZE);
+        subscriber.history_depth = decision->history_depth;
+        exported = export_nvsci_buffer(
+          static_cast<const NvSciBuffer &>(storage), subscriber, *descriptor);
+      }
+#endif
       break;
   }
   if (!exported) {
@@ -349,6 +468,7 @@ std::unique_ptr<void, void (*)(void *)> CudaBufferBackend::from_descriptor_with_
   const void * descriptor_ptr,
   const rmw_topic_endpoint_info_t & endpoint_info) const
 {
+  // Every backend's descriptor says where it came from.
   (void)endpoint_info;
 
   const auto * descriptor = static_cast<const CudaBufferDescriptor *>(descriptor_ptr);
@@ -363,9 +483,26 @@ std::unique_ptr<void, void (*)(void *)> CudaBufferBackend::from_descriptor_with_
             descriptor->element_type_name);
   }
 
-  if (descriptor->use_ipc && !descriptor->vmm_socket_path.empty()) {
+  if (descriptor->use_ipc) {
     try {
-      auto imported_buffer = import_vmm_buffer(*descriptor, local_device_id);
+      std::unique_ptr<CudaBuffer> imported_buffer;
+      switch (descriptor->storage_kind) {
+        case CudaBufferDescriptor::STORAGE_KIND_VMM:
+          if (!descriptor->vmm_socket_path.empty()) {
+            imported_buffer = import_vmm_buffer(*descriptor, local_device_id);
+          }
+          break;
+        case CudaBufferDescriptor::STORAGE_KIND_NVSCI:
+#ifdef CUDA_BUFFER_ENABLE_NVSCI
+          imported_buffer = import_nvsci_buffer(*descriptor);
+#endif
+          break;
+        default:
+          break;
+      }
+      if (!imported_buffer) {
+        throw CudaError("descriptor is for a storage backend this process cannot import");
+      }
 
       auto result = std::make_unique<CudaBufferImpl<uint8_t>>(
         std::move(imported_buffer), descriptor->size);

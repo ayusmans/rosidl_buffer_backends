@@ -37,7 +37,8 @@ namespace
 {
 
 // When set, the test binary runs as a peer process instead of the tests:
-// the value is "<ready_fd>,<done_fd>,<gid_byte>,<late_ipc>".
+// the value is "<ready_fd>,<done_fd>,<gid_byte>,<late_ipc>,<storage_kinds>",
+// where a negative storage_kinds keeps the default capability.
 constexpr const char * kPeerEnv = "CUDA_BUFFER_BACKEND_TEST_PEER";
 constexpr uint8_t kPeerGidByte = 0x6b;
 constexpr uint8_t kLatePeerGidByte = 0x6c;
@@ -53,12 +54,18 @@ int run_peer(const char * args)
   int done_fd = -1;
   int gid_byte = 0;
   int late_ipc = 0;
-  if (std::sscanf(args, "%d,%d,%d,%d", &ready_fd, &done_fd, &gid_byte, &late_ipc) != 4) {
+  int storage_kinds = -1;
+  if (std::sscanf(
+      args, "%d,%d,%d,%d,%d", &ready_fd, &done_fd, &gid_byte, &late_ipc, &storage_kinds) != 5)
+  {
     return 1;
   }
 
   auto manager = HostEndpointManager::get_instance(0);
   manager->set_ipc_capable(!late_ipc);
+  if (storage_kinds >= 0) {
+    manager->set_storage_kinds(static_cast<uint32_t>(storage_kinds));
+  }
 
   rmw_gid_t gid;
   gid.implementation_identifier = "";
@@ -87,7 +94,8 @@ int run_peer(const char * args)
 
 // Start this binary as a peer process whose uid is this one's plus uid_offset.
 pid_t start_peer(
-  uint8_t gid_byte, bool late_ipc, uint32_t uid_offset, int ready[2], int done[2])
+  uint8_t gid_byte, bool late_ipc, uint32_t uid_offset, int ready[2], int done[2],
+  int storage_kinds = -1)
 {
   if (pipe(ready) != 0 || pipe(done) != 0) {
     return -1;
@@ -98,7 +106,8 @@ pid_t start_peer(
   // Build the peer's environment before fork: only exec runs in the child.
   std::vector<std::string> extra_env = {
     std::string(kPeerEnv) + "=" + std::to_string(ready[1]) + "," + std::to_string(done[0]) +
-    "," + std::to_string(gid_byte) + "," + std::to_string(late_ipc ? 1 : 0),
+    "," + std::to_string(gid_byte) + "," + std::to_string(late_ipc ? 1 : 0) +
+    "," + std::to_string(storage_kinds),
     "CUDA_BUFFER_UID_OVERRIDE=" + std::to_string(manager->get_uid() + uid_offset),
   };
   std::vector<char *> envp;
@@ -326,6 +335,68 @@ TEST_F(CudaBufferBackendTest, UncachedDecisionIsCached)
   EXPECT_EQ(manager->get_uid(), after.uid);
   EXPECT_EQ(manager->get_device_id(), after.device_id);
   EXPECT_EQ(nullptr, second);
+}
+
+// Needs a VMM IPC-capable device. What a subscriber can import is decided per
+// storage backend: a peer that advertises only NvSci gets no descriptor for a
+// VMM buffer, while one that advertises VMM does.
+TEST_F(CudaBufferBackendTest, DescriptorOnlyForBackendsThePeerImports)
+{
+  if (!cuda_buffer_backend::vmm_ipc_supported()) {
+    GTEST_SKIP() << "needs an IPC-capable CUDA device";
+  }
+  using cuda_buffer_backend::StorageKind;
+  using cuda_buffer_backend::storage_kind_bit;
+
+  auto manager = HostEndpointManager::get_instance(0);
+  struct Case
+  {
+    uint8_t gid_byte;
+    uint32_t kinds;
+    bool expect_descriptor;
+  };
+  const Case cases[] = {
+    {0x6d, storage_kind_bit(StorageKind::NvSci), false},
+    {0x6e, storage_kind_bit(StorageKind::Vmm), true},
+  };
+
+  for (const Case & c : cases) {
+    int ready[2];
+    int done[2];
+    pid_t pid = start_peer(c.gid_byte, false, 0, ready, done, static_cast<int>(c.kinds));
+    ASSERT_GE(pid, 0);
+
+    char byte = 0;
+    const bool registered = read(ready[0], &byte, 1) == 1;
+    host_endpoint_manager::LocalityInfo peer{};
+    std::shared_ptr<void> descriptor;
+    if (registered) {
+      rmw_gid_t gid;
+      gid.implementation_identifier = "";
+      std::memset(gid.data, c.gid_byte, RMW_GID_STORAGE_SIZE);
+      manager->refresh_from_remote();
+      peer = manager->query_endpoint_locality(gid);
+
+      rmw_topic_endpoint_info_t endpoint_info;
+      std::memset(&endpoint_info, 0, sizeof(endpoint_info));
+      endpoint_info.topic_type = "test_type";
+      endpoint_info.endpoint_type = RMW_ENDPOINT_SUBSCRIPTION;
+      std::memset(endpoint_info.endpoint_gid, c.gid_byte, sizeof(endpoint_info.endpoint_gid));
+
+      CudaBufferImpl<uint8_t> impl(1024, StorageKind::Vmm);
+      descriptor = backend_->create_descriptor_with_endpoint(&impl, endpoint_info);
+    }
+
+    close(ready[0]);
+    close(done[1]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    ASSERT_TRUE(registered);
+    ASSERT_TRUE(peer.found);
+    EXPECT_EQ(c.kinds, peer.storage_kinds);
+    EXPECT_EQ(c.expect_descriptor, descriptor != nullptr) << "peer kinds " << c.kinds;
+  }
 }
 
 int main(int argc, char ** argv)
