@@ -21,7 +21,7 @@ flowchart LR
 
   Pub -->|"allocate_buffer + from_output_buffer"| Buffer["rosidl::Buffer&lt;uint8_t&gt;"]
   Buffer -->|"backend = 'cuda'"| Plugin[cuda_buffer_backend plugin]
-  Plugin -->|"create_descriptor"| Descriptor["CudaBufferDescriptor<br/>(pid, block_id, socket, uid, event_handle)"]
+  Plugin -->|"create_descriptor"| Descriptor["CudaBufferDescriptor<br/>(size, device, uid, storage_kind,<br/>vmm or nvsci entry)"]
   Descriptor -->|"published over RMW"| Sub
   Plugin -.->|"VMM allocations"| Pool[CudaMemoryPool]
   Plugin -.->|"FD passing via SCM_RIGHTS"| IPC[CudaVmmIPCManager]
@@ -92,12 +92,13 @@ subscriber cannot import goes over the CPU path for that subscriber only.
 
 ```mermaid
 flowchart TB
-  Discover["on_discovering_endpoint(remote)"] --> A{remote supports 'cuda'?}
-  A -->|no| Fallback[CPU fallback]
+  Discover["on_discovering_endpoint(remote)"] --> A{"remote advertises 'cuda'<br/>with our descriptor version?"}
+  A -->|no| K0["kinds = none"]
+  K0 --> Cache
   A -->|yes| B{locality}
   B -->|INTRA_PROCESS| K1["kinds = VMM (if VMM IPC) + NvSci"]
   B -->|"INTER_PROCESS_SAME_HOST,<br/>same device and uid"| K2["kinds = remote's importable &amp; local importable"]
-  B -->|other| Fallback
+  B -->|other| Fallback[CPU fallback]
   K1 --> Cache[(decision cache)]
   K2 --> Cache
   Publish["create_descriptor_with_endpoint(buffer)"] --> C{buffer's kind in cached kinds?}
@@ -106,6 +107,31 @@ flowchart TB
   C -->|VMM| ExportVmm[export_vmm_buffer]
   C -->|NvSci| ExportSci[export_nvsci_buffer]
 ```
+
+### The descriptor
+
+`CudaBufferDescriptor` carries what every backend needs (`size`,
+`element_type_name`, `device_id`, `ipc_uid`) and `storage_kind`, followed by one
+bounded field per backend: `VmmDescriptor[<=1] vmm` and
+`NvSciDescriptor[<=1] nvsci`. Exactly the field that `storage_kind` names holds
+an entry, so a descriptor carries only its own backend's metadata; every other
+field costs its 4-byte length. A descriptor whose entry is missing is dropped
+like a failed import.
+
+The RMW sends a descriptor as the backend name (`"cuda"`) followed by the
+message, with no type hash, so two builds that disagree on its layout would
+misread each other. The plugin therefore advertises
+`CudaBufferBackend::kDescriptorVersion` as its backend metadata, and a peer that
+advertises `"cuda"` with any other value, including the empty metadata of
+builds from before the version existed, is cached with no importable kinds and
+gets every message over the CPU path. The check runs in the publisher, so it
+also protects an older subscriber; an older publisher does not check, and still
+sends its own layout to a newer subscriber.
+
+Adding a backend adds a `StorageKind` enumerator, a matching `STORAGE_KIND_*`
+constant, a `<Backend>Descriptor` message with its bounded field, and a new
+`kDescriptorVersion`. Any other change to these messages also changes the
+version.
 
 The rest of this section and the next ones describe VMM; NvSci follows in
 [NvSci storage](#nvsci-storage).
@@ -222,7 +248,7 @@ flowchart LR
 ```
 
 - **Streams.** Each subscriber endpoint (by GID) has a stream, and the
-  descriptors sent to it are numbered (`nvsci_stream`, `nvsci_seq`). A
+  descriptors sent to it are numbered (`nvsci.stream`, `nvsci.seq`). A
   subscriber takes one publisher's samples in sending order, so once it has
   handled number k, every earlier one was imported or never will be. Every
   import, successful or not, reports its number: within the process directly,

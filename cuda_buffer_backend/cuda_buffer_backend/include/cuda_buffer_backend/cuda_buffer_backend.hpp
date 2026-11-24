@@ -41,6 +41,17 @@ namespace cuda_buffer_backend
 class CudaBufferBackend : public rosidl::BufferBackend
 {
 public:
+  /// \brief Layout version of CudaBufferDescriptor, advertised as this
+  /// backend's metadata.
+  /// \details The RMW sends a descriptor as the backend name and the message,
+  /// with no type hash, so two builds that disagree on the layout would
+  /// misread each other's descriptors. A peer that advertises "cuda" with any
+  /// other metadata, including the empty metadata of builds from before this
+  /// version, gets every message over the CPU path. Change it whenever
+  /// CudaBufferDescriptor or a message it contains changes. It travels in the
+  /// endpoint's user data, so it must not contain ',', ';' or '='.
+  static constexpr const char * kDescriptorVersion = "descriptor-v2";
+
   CudaBufferBackend();
   ~CudaBufferBackend() override = default;
 
@@ -71,7 +82,7 @@ public:
 
   std::string get_backend_metadata() const override
   {
-    return "";
+    return kDescriptorVersion;
   }
 
 private:

@@ -50,6 +50,8 @@ namespace
 {
 
 using cuda_buffer_backend_msgs::msg::CudaBufferDescriptor;
+using cuda_buffer_backend_msgs::msg::NvSciDescriptor;
+using cuda_buffer_backend_msgs::msg::VmmDescriptor;
 
 // -- CUDA VMM transport --
 //
@@ -57,7 +59,7 @@ using cuda_buffer_backend_msgs::msg::CudaBufferDescriptor;
 // in these two functions: exporting a pool block and its write event into a
 // descriptor, and mapping a described block back into a VmmBuffer.
 
-/// \brief Fill the VMM IPC fields of \p descriptor for \p buffer.
+/// \brief Fill ipc_uid and the vmm entry of \p descriptor for \p buffer.
 /// \param peer_is_same_process queried only once the block is known to be shareable.
 /// \return false if \p buffer cannot be shared over VMM IPC.
 bool export_vmm_buffer(
@@ -82,14 +84,12 @@ bool export_vmm_buffer(
     return false;
   }
 
-  uint64_t uid = pool->assign_uid(block);
-
-  descriptor.use_ipc = true;
-  descriptor.vmm_pid = static_cast<int32_t>(getpid());
-  descriptor.vmm_block_id = block->block_id;
-  descriptor.vmm_block_size = block->size;
-  descriptor.vmm_socket_path = socket_path;
-  descriptor.ipc_uid = uid;
+  VmmDescriptor vmm;
+  vmm.pid = static_cast<int32_t>(getpid());
+  vmm.block_id = block->block_id;
+  vmm.block_size = block->size;
+  vmm.socket_path = socket_path;
+  const uint64_t uid = pool->assign_uid(block);
 
   buffer.finalize_write_handle();
 
@@ -105,30 +105,37 @@ bool export_vmm_buffer(
   if (write_event) {
     cudaIpcEventHandle_t event_handle;
     CUDA_CHECK(cudaIpcGetEventHandle(&event_handle, write_event));
-    std::memcpy(
-      descriptor.ipc_event_handle.data(), &event_handle, sizeof(cudaIpcEventHandle_t));
+    std::memcpy(vmm.event_handle.data(), &event_handle, sizeof(cudaIpcEventHandle_t));
   } else {
-    std::memset(descriptor.ipc_event_handle.data(), 0, sizeof(cudaIpcEventHandle_t));
+    std::memset(vmm.event_handle.data(), 0, sizeof(cudaIpcEventHandle_t));
   }
 
+  descriptor.ipc_uid = uid;
+  descriptor.vmm.push_back(std::move(vmm));
   return true;
 }
 
 /// \brief Map the VMM block described by \p descriptor into this process.
+/// \return nullptr if \p descriptor has no usable vmm entry.
 /// \throws std::exception if the block cannot be imported.
 std::unique_ptr<CudaBuffer> import_vmm_buffer(
   const CudaBufferDescriptor & descriptor,
   int local_device_id)
 {
+  if (descriptor.vmm.empty() || descriptor.vmm[0].socket_path.empty()) {
+    return nullptr;
+  }
+  const VmmDescriptor & vmm = descriptor.vmm[0];
+
   if (descriptor.device_id != local_device_id) {
     throw CudaError("Cross-device IPC not implemented");
   }
 
   auto import_result = CudaVmmIPCManager::import_block(
-    descriptor.vmm_socket_path,
-    descriptor.vmm_pid,
-    descriptor.vmm_block_id,
-    descriptor.vmm_block_size,
+    vmm.socket_path,
+    vmm.pid,
+    vmm.block_id,
+    vmm.block_size,
     descriptor.ipc_uid);
 
   IPCMetadata * meta = import_result.ipc_meta;
@@ -141,18 +148,12 @@ std::unique_ptr<CudaBuffer> import_vmm_buffer(
     reinterpret_cast<void *>(import_result.va), descriptor.size * sizeof(uint8_t),
     descriptor.device_id, deleter);
 
-  bool has_event = false;
-  for (size_t i = 0; i < descriptor.ipc_event_handle.size(); ++i) {
-    if (descriptor.ipc_event_handle[i] != 0) {
-      has_event = true;
-      break;
-    }
-  }
+  const bool has_event = std::any_of(
+    vmm.event_handle.begin(), vmm.event_handle.end(), [](uint8_t b) {return b != 0;});
 
   if (has_event) {
     cudaIpcEventHandle_t event_handle;
-    std::memcpy(&event_handle, descriptor.ipc_event_handle.data(),
-        sizeof(cudaIpcEventHandle_t));
+    std::memcpy(&event_handle, vmm.event_handle.data(), sizeof(cudaIpcEventHandle_t));
 
     cudaEvent_t imported_event = nullptr;
     cudaError_t ev_err = cudaIpcOpenEventHandle(&imported_event, event_handle);
@@ -177,7 +178,7 @@ std::unique_ptr<CudaBuffer> import_vmm_buffer(
 // in a message for whoever reads it. It is pushed to one peer process over
 // that peer's NvSciIpc channel, and the descriptor only names it.
 
-/// \brief Fill the NvSci fields of \p descriptor for \p subscriber.
+/// \brief Fill ipc_uid and the nvsci entry of \p descriptor for \p subscriber.
 /// \return false if \p buffer cannot be shared with that subscriber.
 bool export_nvsci_buffer(
   const NvSciBuffer & buffer, const NvSciSubscriber & subscriber,
@@ -194,35 +195,42 @@ bool export_nvsci_buffer(
     return false;
   }
   static_assert(
-    sizeof(out.fence) == std::tuple_size<decltype(descriptor.nvsci_fence)>::value,
-    "nvsci_fence does not match NvSciSyncFenceIpcExportDescriptor");
-  descriptor.use_ipc = true;
+    sizeof(out.fence) == std::tuple_size<NvSciDescriptor::_fence_type>::value,
+    "NvSciDescriptor.fence does not match NvSciSyncFenceIpcExportDescriptor");
+  NvSciDescriptor nvsci;
+  nvsci.pid = static_cast<int32_t>(out.pid);
+  nvsci.buffer_id = out.buffer_id;
+  nvsci.sync_channel_id = out.sync_channel_id;
+  nvsci.has_fence = out.has_fence;
+  std::memcpy(nvsci.fence.data(), out.fence.data(), out.fence.size());
+  nvsci.connection = out.connection;
+  nvsci.stream = out.stream;
+  nvsci.seq = out.seq;
   descriptor.ipc_uid = out.uid;
-  descriptor.nvsci_pid = static_cast<int32_t>(out.pid);
-  descriptor.nvsci_buffer_id = out.buffer_id;
-  descriptor.nvsci_sync_channel_id = out.sync_channel_id;
-  descriptor.nvsci_has_fence = out.has_fence;
-  std::memcpy(descriptor.nvsci_fence.data(), out.fence.data(), out.fence.size());
-  descriptor.nvsci_connection = out.connection;
-  descriptor.nvsci_stream = out.stream;
-  descriptor.nvsci_seq = out.seq;
+  descriptor.nvsci.push_back(std::move(nvsci));
   return true;
 }
 
 /// \brief Map the NvSci buffer named by \p descriptor.
+/// \return nullptr if \p descriptor has no nvsci entry.
 /// \throws std::exception if it cannot be mapped.
 std::unique_ptr<CudaBuffer> import_nvsci_buffer(const CudaBufferDescriptor & descriptor)
 {
+  if (descriptor.nvsci.empty()) {
+    return nullptr;
+  }
+  const NvSciDescriptor & nvsci = descriptor.nvsci[0];
+
   NvSciExport in;
-  in.pid = static_cast<pid_t>(descriptor.nvsci_pid);
-  in.buffer_id = descriptor.nvsci_buffer_id;
+  in.pid = static_cast<pid_t>(nvsci.pid);
+  in.buffer_id = nvsci.buffer_id;
   in.uid = descriptor.ipc_uid;
-  in.sync_channel_id = descriptor.nvsci_sync_channel_id;
-  in.has_fence = descriptor.nvsci_has_fence;
-  std::memcpy(in.fence.data(), descriptor.nvsci_fence.data(), in.fence.size());
-  in.connection = descriptor.nvsci_connection;
-  in.stream = descriptor.nvsci_stream;
-  in.seq = descriptor.nvsci_seq;
+  in.sync_channel_id = nvsci.sync_channel_id;
+  in.has_fence = nvsci.has_fence;
+  std::memcpy(in.fence.data(), nvsci.fence.data(), in.fence.size());
+  in.connection = nvsci.connection;
+  in.stream = nvsci.stream;
+  in.seq = nvsci.seq;
   return NvSciRuntime::get().import_buffer(in, descriptor.size * sizeof(uint8_t));
 }
 
@@ -317,9 +325,22 @@ CudaBufferBackend::on_discovering_endpoint(
 {
   (void)existing_endpoints;
 
-  bool supports_cuda = endpoint_supported_backends.find("cuda") !=
-    endpoint_supported_backends.end();
-  if (!supports_cuda) {
+  // The RMW does not act on the result: it still asks for a descriptor for
+  // this peer on every publish. A peer that must never get one is therefore
+  // cached with no importable kinds, which create_descriptor_with_endpoint
+  // turns into the CPU path.
+  const auto cuda = endpoint_supported_backends.find(get_backend_type());
+  if (cuda == endpoint_supported_backends.end() || cuda->second != kDescriptorVersion) {
+    if (cuda != endpoint_supported_backends.end()) {
+      RCUTILS_LOG_WARN_NAMED("cuda_buffer_backend",
+        "Peer on topic type '%s' uses CUDA descriptor layout '%s', this process uses '%s'; "
+        "using the CPU path for it",
+        endpoint_info.topic_type ? endpoint_info.topic_type : "",
+        cuda->second.empty() ? "(unversioned)" : cuda->second.c_str(), kDescriptorVersion);
+    }
+    std::lock_guard<std::mutex> lock(ipc_cache_mutex_);
+    ipc_decision_cache_[host_endpoint_manager::GidKey(endpoint_info.endpoint_gid)] =
+      ShareDecision{};
     return {false, {}};
   }
 
@@ -483,36 +504,34 @@ std::unique_ptr<void, void (*)(void *)> CudaBufferBackend::from_descriptor_with_
             descriptor->element_type_name);
   }
 
-  if (descriptor->use_ipc) {
-    try {
-      std::unique_ptr<CudaBuffer> imported_buffer;
-      switch (descriptor->storage_kind) {
-        case CudaBufferDescriptor::STORAGE_KIND_VMM:
-          if (!descriptor->vmm_socket_path.empty()) {
-            imported_buffer = import_vmm_buffer(*descriptor, local_device_id);
-          }
-          break;
-        case CudaBufferDescriptor::STORAGE_KIND_NVSCI:
+  // A descriptor is only sent once its backend's entry is filled in, and the
+  // import functions return nullptr when that entry is missing.
+  try {
+    std::unique_ptr<CudaBuffer> imported_buffer;
+    switch (descriptor->storage_kind) {
+      case CudaBufferDescriptor::STORAGE_KIND_VMM:
+        imported_buffer = import_vmm_buffer(*descriptor, local_device_id);
+        break;
+      case CudaBufferDescriptor::STORAGE_KIND_NVSCI:
 #ifdef CUDA_BUFFER_ENABLE_NVSCI
-          imported_buffer = import_nvsci_buffer(*descriptor);
+        imported_buffer = import_nvsci_buffer(*descriptor);
 #endif
-          break;
-        default:
-          break;
-      }
-      if (!imported_buffer) {
-        throw CudaError("descriptor is for a storage backend this process cannot import");
-      }
-
-      auto result = std::make_unique<CudaBufferImpl<uint8_t>>(
-        std::move(imported_buffer), descriptor->size);
-      return {result.release(), [](void * p) {
-          delete static_cast<rosidl::BufferImplBase<uint8_t> *>(p);
-        }};
-    } catch (const std::exception & e) {
-      RCUTILS_LOG_WARN_NAMED("cuda_buffer_backend",
-        "IPC import failed, falling back to CPU: %s", e.what());
+        break;
+      default:
+        break;
     }
+    if (!imported_buffer) {
+      throw CudaError("descriptor is for a storage backend this process cannot import");
+    }
+
+    auto result = std::make_unique<CudaBufferImpl<uint8_t>>(
+      std::move(imported_buffer), descriptor->size);
+    return {result.release(), [](void * p) {
+        delete static_cast<rosidl::BufferImplBase<uint8_t> *>(p);
+      }};
+  } catch (const std::exception & e) {
+    RCUTILS_LOG_WARN_NAMED("cuda_buffer_backend",
+      "IPC import failed, falling back to CPU: %s", e.what());
   }
 
   RCUTILS_LOG_WARN_NAMED("cuda_buffer_backend",
