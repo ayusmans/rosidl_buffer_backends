@@ -19,10 +19,14 @@ from typing import Optional
 from typing import Union
 
 from cuda_buffer._cuda_buffer_py import _allocate_buffer
+from cuda_buffer._cuda_buffer_py import _default_storage
 from cuda_buffer._cuda_buffer_py import _from_input_buffer
 from cuda_buffer._cuda_buffer_py import _from_input_cpu_data
 from cuda_buffer._cuda_buffer_py import _from_output_buffer
 from cuda_buffer._cuda_buffer_py import _from_output_cpu_data
+from cuda_buffer._cuda_buffer_py import _is_storage_available
+from cuda_buffer._cuda_buffer_py import _set_default_storage
+from cuda_buffer._cuda_buffer_py import _storage_of
 from cuda_buffer._cuda_buffer_py import _to_buffer
 from cuda_buffer._cuda_buffer_py import CudaReadHandle
 from cuda_buffer._cuda_buffer_py import CudaWriteHandle
@@ -33,9 +37,40 @@ class CudaBuffer:
     """Allocate, acquire input/output handles, and copy into CUDA buffers."""
 
     @staticmethod
-    def allocate_buffer(size: int) -> Buffer:
-        """Allocate an uninitialized CUDA-backed buffer without synchronizing."""
-        return _allocate_buffer(size)
+    def allocate_buffer(size: int, storage: Optional[str] = None) -> Buffer:
+        """
+        Allocate an uninitialized CUDA-backed buffer without synchronizing.
+
+        ``storage`` names the storage backend, ``'vmm'`` or ``'nvsci'``; None
+        uses the default (see ``default_storage``). Raises ValueError for an
+        unknown name and RuntimeError if the backend is not available.
+        """
+        return _allocate_buffer(size, storage)
+
+    @staticmethod
+    def default_storage() -> str:
+        """
+        Return the storage backend used when none is named.
+
+        ``set_default_storage`` if it was called, otherwise the
+        CUDA_BUFFER_STORAGE environment variable, otherwise ``'vmm'``.
+        """
+        return _default_storage()
+
+    @staticmethod
+    def set_default_storage(storage: str) -> None:
+        """Use ``storage`` for allocations that do not name a backend from now on."""
+        _set_default_storage(storage)
+
+    @staticmethod
+    def is_storage_available(storage: str) -> bool:
+        """Return whether buffers of ``storage`` can be allocated in this process."""
+        return _is_storage_available(storage)
+
+    @staticmethod
+    def storage_of(buffer: Buffer) -> Optional[str]:
+        """Return the storage backend of ``buffer``, or None if it is not CUDA-backed."""
+        return _storage_of(buffer)
 
     @staticmethod
     def to_buffer(

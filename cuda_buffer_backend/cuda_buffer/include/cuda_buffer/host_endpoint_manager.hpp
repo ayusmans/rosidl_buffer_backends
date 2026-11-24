@@ -54,8 +54,15 @@ struct LocalityInfo
   uint64_t remote_instance_id;
   int device_id;
   uint32_t uid;
+  /// True if storage_kinds is not empty.
   bool ipc_capable;
   bool found;
+  /// Storage backends the endpoint's process can import, one bit per
+  /// cuda_buffer_backend::StorageKind value.
+  uint32_t storage_kinds;
+  /// For a subscription: the depth of its KEEP_LAST history, or 0 if unknown
+  /// or KEEP_ALL.
+  uint32_t history_depth;
 };
 
 struct GidKey
@@ -100,10 +107,19 @@ public:
   HostEndpointManager(HostEndpointManager &&) = delete;
   HostEndpointManager & operator=(HostEndpointManager &&) = delete;
 
-  void set_ipc_capable(bool capable) {local_ipc_capable_ = capable;}
+  /// \brief Set the storage backends this process can import, one bit per
+  /// cuda_buffer_backend::StorageKind value. Applies to endpoints registered
+  /// from now on. Only the low 8 bits are stored.
+  void set_storage_kinds(uint32_t storage_kinds) {local_storage_kinds_ = storage_kinds & 0xffu;}
+
+  /// \brief Same as set_storage_kinds() with only the VMM bit, or none.
+  void set_ipc_capable(bool capable) {set_storage_kinds(capable ? 1u : 0u);}
 
   bool register_publisher(const rmw_gid_t & gid, const char * topic_name);
-  bool register_subscription(const rmw_gid_t & gid, const char * topic_name);
+  /// \param history_depth depth of the subscription's KEEP_LAST history, or 0
+  /// if unknown or KEEP_ALL. Stored up to 65535.
+  bool register_subscription(
+    const rmw_gid_t & gid, const char * topic_name, uint32_t history_depth = 0);
   LocalityInfo query_endpoint_locality(const rmw_gid_t & gid) const;
 
   void refresh_from_remote();
@@ -117,7 +133,8 @@ private:
   bool register_endpoint(
     const rmw_gid_t & gid,
     const char * name,
-    EntityType type);
+    EntityType type,
+    uint32_t history_depth);
 
   static uint32_t hash_string(const std::string & str);
 
@@ -141,14 +158,15 @@ private:
     EntityType entity_type;
     int device_id;
     uint32_t uid;
-    bool ipc_capable;
+    uint32_t storage_kinds;
+    uint32_t history_depth;
   };
   mutable std::unordered_map<GidKey, CachedEndpointInfo, GidKeyHash> local_cache_;
   mutable std::mutex cache_mutex_;
 
   int local_device_id_;
   uint32_t local_uid_;
-  bool local_ipc_capable_{false};
+  uint32_t local_storage_kinds_{0};
 };
 
 }  // namespace host_endpoint_manager

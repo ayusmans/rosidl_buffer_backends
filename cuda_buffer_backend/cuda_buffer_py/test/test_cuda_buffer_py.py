@@ -61,9 +61,38 @@ def stream(cudart):
 
 def test_core_operations():
     assert {name for name in vars(CudaBuffer) if not name.startswith('_')} == {
-        'allocate_buffer', 'from_output_buffer', 'from_input_buffer', 'to_buffer'}
+        'allocate_buffer', 'from_output_buffer', 'from_input_buffer', 'to_buffer',
+        'default_storage', 'set_default_storage', 'is_storage_available', 'storage_of'}
     assert not hasattr(CudaReadHandle, 'buffer')
     assert not hasattr(CudaWriteHandle, 'buffer')
+
+
+def test_storage_defaults_to_vmm():
+    assert CudaBuffer.default_storage() == 'vmm'
+    assert CudaBuffer.is_storage_available('vmm')
+    buffer = CudaBuffer.allocate_buffer(64)
+    assert CudaBuffer.storage_of(buffer) == 'vmm'
+
+
+def test_storage_can_be_chosen_per_buffer():
+    assert CudaBuffer.storage_of(CudaBuffer.allocate_buffer(64, storage='vmm')) == 'vmm'
+    if CudaBuffer.is_storage_available('nvsci'):
+        buffer = CudaBuffer.allocate_buffer(64, storage='nvsci')
+        assert CudaBuffer.storage_of(buffer) == 'nvsci'
+    else:
+        with pytest.raises(RuntimeError):
+            CudaBuffer.allocate_buffer(64, storage='nvsci')
+
+
+def test_storage_rejects_unknown_names():
+    with pytest.raises(ValueError):
+        CudaBuffer.allocate_buffer(64, storage='host')
+    with pytest.raises(ValueError):
+        CudaBuffer.is_storage_available('host')
+
+
+def test_storage_of_cpu_buffer_is_none():
+    assert CudaBuffer.storage_of(buffer_test_utils.make_cpu_buffer(b'abc')) is None
 
 
 @pytest.mark.parametrize('source', [

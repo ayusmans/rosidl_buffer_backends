@@ -16,6 +16,8 @@ find_package(rmw REQUIRED)
 find_package(rcutils REQUIRED)
 
 find_package(CUDAToolkit REQUIRED)
+# Reads the NvSci endpoint pool inventory; header-only.
+find_package(nlohmann_json 3 QUIET)
 message(STATUS "${PROJECT_NAME}: CUDA ${CUDAToolkit_VERSION} from ${CUDAToolkit_BIN_DIR}")
 
 add_library(${PROJECT_NAME} SHARED
@@ -23,6 +25,7 @@ add_library(${PROJECT_NAME} SHARED
   src/cuda_buffer_impl.cpp
   src/cuda_buffer_ipc_manager.cpp
   src/cuda_memory_pool.cpp
+  src/deferred_release.cpp
   src/host_endpoint_manager.cpp
   src/vmm_buffer.cpp
 )
@@ -44,6 +47,41 @@ target_link_libraries(${PROJECT_NAME}
     CUDA::cuda_driver
     rt
 )
+
+# NvSci storage backend. Built when the NvSci headers and libraries are found
+# (Jetson, or the x86 "nvsci" package); set CUDA_BUFFER_NVSCI=ON to require it
+# or OFF to leave it out. The definition is PUBLIC because the plugin compiles
+# its NvSci transport only when it is set. Whether NvSci is usable is decided
+# at runtime: a build with NvSci still runs where NvSci is not available.
+set(CUDA_BUFFER_NVSCI "AUTO" CACHE STRING "Build the NvSci storage backend: ON, OFF or AUTO")
+set_property(CACHE CUDA_BUFFER_NVSCI PROPERTY STRINGS ON OFF AUTO)
+if(NOT CUDA_BUFFER_NVSCI STREQUAL "OFF")
+  find_path(NVSCI_INCLUDE_DIR nvscibuf.h PATH_SUFFIXES nvsci)
+  find_library(NVSCIBUF_LIBRARY nvscibuf PATH_SUFFIXES nvidia)
+  find_library(NVSCISYNC_LIBRARY nvscisync PATH_SUFFIXES nvidia)
+  find_library(NVSCIIPC_LIBRARY nvsciipc PATH_SUFFIXES nvidia)
+  if(NVSCI_INCLUDE_DIR AND NVSCIBUF_LIBRARY AND NVSCISYNC_LIBRARY AND NVSCIIPC_LIBRARY
+      AND nlohmann_json_FOUND)
+    message(STATUS "${PROJECT_NAME}: NvSci storage backend enabled (${NVSCI_INCLUDE_DIR})")
+    target_sources(${PROJECT_NAME} PRIVATE
+      src/nvsci_buffer.cpp
+      src/nvsci_endpoint_pool.cpp
+      src/nvsci_ledger.cpp
+      src/nvsci_peer.cpp
+      src/nvsci_runtime.cpp
+    )
+    target_compile_definitions(${PROJECT_NAME} PUBLIC CUDA_BUFFER_ENABLE_NVSCI)
+    target_include_directories(${PROJECT_NAME} PUBLIC ${NVSCI_INCLUDE_DIR})
+    target_link_libraries(${PROJECT_NAME}
+      PUBLIC ${NVSCIBUF_LIBRARY} ${NVSCISYNC_LIBRARY} ${NVSCIIPC_LIBRARY}
+      PRIVATE $<BUILD_INTERFACE:nlohmann_json::nlohmann_json>)
+  elseif(CUDA_BUFFER_NVSCI STREQUAL "ON")
+    message(FATAL_ERROR
+      "CUDA_BUFFER_NVSCI=ON but the NvSci headers or libraries, or nlohmann_json, were not found")
+  else()
+    message(STATUS "${PROJECT_NAME}: NvSci not found; NvSci storage backend disabled")
+  endif()
+endif()
 
 install(
   DIRECTORY include/
@@ -87,6 +125,38 @@ if(BUILD_TESTING)
       CUDA::cudart
       CUDA::cuda_driver
       rt
+    )
+  endif()
+
+  # The ledger and the endpoint pool are free of NvSci and CUDA, so they are
+  # tested on every machine.
+  ament_add_gtest(test_nvsci_ledger
+    test/test_nvsci_ledger.cpp
+    src/nvsci_ledger.cpp
+  )
+  if(TARGET test_nvsci_ledger)
+    target_include_directories(test_nvsci_ledger PRIVATE src)
+  endif()
+
+  if(nlohmann_json_FOUND)
+    ament_add_gtest(test_nvsci_endpoint_pool
+      test/test_nvsci_endpoint_pool.cpp
+      src/nvsci_endpoint_pool.cpp
+    )
+    if(TARGET test_nvsci_endpoint_pool)
+      target_include_directories(test_nvsci_endpoint_pool PRIVATE src)
+      target_link_libraries(test_nvsci_endpoint_pool nlohmann_json::nlohmann_json rt)
+    endif()
+  endif()
+
+  ament_add_gtest(test_storage_selection
+    test/test_storage_selection.cpp
+  )
+  if(TARGET test_storage_selection)
+    target_link_libraries(test_storage_selection
+      ${PROJECT_NAME}
+      rosidl_buffer::rosidl_buffer
+      CUDA::cudart
     )
   endif()
 

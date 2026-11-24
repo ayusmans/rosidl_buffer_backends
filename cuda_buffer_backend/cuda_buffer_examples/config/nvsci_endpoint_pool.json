@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "pool": [
+    {
+      "endpointA": "cuda_buffer_0",
+      "endpointB": "cuda_buffer_1"
+    },
+    {
+      "endpointA": "cuda_buffer_2",
+      "endpointB": "cuda_buffer_3"
+    },
+    {
+      "endpointA": "cuda_buffer_4",
+      "endpointB": "cuda_buffer_5"
+    },
+    {
+      "endpointA": "cuda_buffer_6",
+      "endpointB": "cuda_buffer_7"
+    },
+    {
+      "endpointA": "cuda_buffer_8",
+      "endpointB": "cuda_buffer_9"
+    },
+    {
+      "endpointA": "cuda_buffer_10",
+      "endpointB": "cuda_buffer_11"
+    },
+    {
+      "endpointA": "cuda_buffer_12",
+      "endpointB": "cuda_buffer_13"
+    },
+    {
+      "endpointA": "cuda_buffer_14",
+      "endpointB": "cuda_buffer_15"
+    },
+    {
+      "endpointA": "cuda_buffer_16",
+      "endpointB": "cuda_buffer_17"
+    },
+    {
+      "endpointA": "cuda_buffer_18",
+      "endpointB": "cuda_buffer_19"
+    },
+    {
+      "endpointA": "cuda_buffer_20",
+      "endpointB": "cuda_buffer_21"
+    },
+    {
+      "endpointA": "cuda_buffer_22",
+      "endpointB": "cuda_buffer_23"
+    },
+    {
+      "endpointA": "cuda_buffer_24",
+      "endpointB": "cuda_buffer_25"
+    },
+    {
+      "endpointA": "cuda_buffer_26",
+      "endpointB": "cuda_buffer_27"
+    },
+    {
+      "endpointA": "cuda_buffer_28",
+      "endpointB": "cuda_buffer_29"
+    },
+    {
+      "endpointA": "cuda_buffer_30",
+      "endpointB": "cuda_buffer_31"
+    }
+  ]
+}

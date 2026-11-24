@@ -15,14 +15,19 @@
 uint64 size                    # Allocation size in bytes
 string element_type_name       # Type name for validation (e.g., "h" for uint8_t)
 int32 device_id                # CUDA device ID of the source GPU
-
-# IPC metadata for VMM-based zero-copy sharing
-bool use_ipc                   # True if IPC handles are valid
-int32 vmm_pid                  # Publisher process ID
-uint32 vmm_block_id            # Block ID in the publisher's pool
-uint64 vmm_block_size          # Block size (for import mapping)
-string vmm_socket_path         # Unix socket path to receive block FD
 uint64 ipc_uid                 # Unique ID per publish for staleness detection
 
-# CUDA IPC event for inter-process GPU synchronization
-uint8[64] ipc_event_handle     # cudaIpcEventHandle_t (64 bytes)
+# Which storage backend produced this descriptor
+# (cuda_buffer_backend::StorageKind). The field of that backend below holds
+# exactly one entry and every other backend's field is empty, so a descriptor
+# carries only its own backend's metadata.
+#
+# Adding a backend adds an enumerator here, a <Backend>Descriptor message, a
+# bounded field below, and a new CudaBufferBackend::kDescriptorVersion: peers
+# that disagree on this layout must not exchange descriptors.
+uint8 STORAGE_KIND_VMM=0
+uint8 STORAGE_KIND_NVSCI=1
+uint8 storage_kind
+
+VmmDescriptor[<=1] vmm
+NvSciDescriptor[<=1] nvsci

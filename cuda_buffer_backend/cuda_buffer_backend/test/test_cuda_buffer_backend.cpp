@@ -22,6 +22,9 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <typeinfo>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "cuda_buffer/cuda_buffer_impl.hpp"
@@ -31,16 +34,20 @@
 
 using cuda_buffer_backend::CudaBufferBackend;
 using cuda_buffer_backend::CudaBufferImpl;
+using cuda_buffer_backend_msgs::msg::CudaBufferDescriptor;
 using host_endpoint_manager::HostEndpointManager;
 
 namespace
 {
 
 // When set, the test binary runs as a peer process instead of the tests:
-// the value is "<ready_fd>,<done_fd>,<gid_byte>,<late_ipc>".
+// the value is "<ready_fd>,<done_fd>,<gid_byte>,<late_ipc>,<storage_kinds>",
+// where a negative storage_kinds keeps the default capability.
 constexpr const char * kPeerEnv = "CUDA_BUFFER_BACKEND_TEST_PEER";
 constexpr uint8_t kPeerGidByte = 0x6b;
 constexpr uint8_t kLatePeerGidByte = 0x6c;
+constexpr uint8_t kVersionedPeerGidByte = 0x70;
+constexpr uint8_t kUnversionedPeerGidByte = 0x71;
 
 // Register a subscription as a separate process on this host, tell the
 // parent, and stay registered until the parent closes done_fd. It is IPC
@@ -53,12 +60,18 @@ int run_peer(const char * args)
   int done_fd = -1;
   int gid_byte = 0;
   int late_ipc = 0;
-  if (std::sscanf(args, "%d,%d,%d,%d", &ready_fd, &done_fd, &gid_byte, &late_ipc) != 4) {
+  int storage_kinds = -1;
+  if (std::sscanf(
+      args, "%d,%d,%d,%d,%d", &ready_fd, &done_fd, &gid_byte, &late_ipc, &storage_kinds) != 5)
+  {
     return 1;
   }
 
   auto manager = HostEndpointManager::get_instance(0);
   manager->set_ipc_capable(!late_ipc);
+  if (storage_kinds >= 0) {
+    manager->set_storage_kinds(static_cast<uint32_t>(storage_kinds));
+  }
 
   rmw_gid_t gid;
   gid.implementation_identifier = "";
@@ -87,7 +100,8 @@ int run_peer(const char * args)
 
 // Start this binary as a peer process whose uid is this one's plus uid_offset.
 pid_t start_peer(
-  uint8_t gid_byte, bool late_ipc, uint32_t uid_offset, int ready[2], int done[2])
+  uint8_t gid_byte, bool late_ipc, uint32_t uid_offset, int ready[2], int done[2],
+  int storage_kinds = -1)
 {
   if (pipe(ready) != 0 || pipe(done) != 0) {
     return -1;
@@ -98,7 +112,8 @@ pid_t start_peer(
   // Build the peer's environment before fork: only exec runs in the child.
   std::vector<std::string> extra_env = {
     std::string(kPeerEnv) + "=" + std::to_string(ready[1]) + "," + std::to_string(done[0]) +
-    "," + std::to_string(gid_byte) + "," + std::to_string(late_ipc ? 1 : 0),
+    "," + std::to_string(gid_byte) + "," + std::to_string(late_ipc ? 1 : 0) +
+    "," + std::to_string(storage_kinds),
     "CUDA_BUFFER_UID_OVERRIDE=" + std::to_string(manager->get_uid() + uid_offset),
   };
   std::vector<char *> envp;
@@ -143,6 +158,17 @@ TEST_F(CudaBufferBackendTest, BackendTypeName)
   EXPECT_EQ(backend_->get_backend_type(), "cuda");
 }
 
+// The descriptor version travels in the endpoint's user data as
+// "buffer_backends=<name>:<metadata>,...;", so it must not contain the
+// separators of that encoding.
+TEST_F(CudaBufferBackendTest, MetadataIsTheDescriptorVersion)
+{
+  const std::string metadata = backend_->get_backend_metadata();
+  EXPECT_EQ(std::string(CudaBufferBackend::kDescriptorVersion), metadata);
+  EXPECT_FALSE(metadata.empty());
+  EXPECT_EQ(std::string::npos, metadata.find_first_of(",;="));
+}
+
 TEST_F(CudaBufferBackendTest, OnDiscoveringEndpointWithoutCudaSupport)
 {
   rmw_topic_endpoint_info_t endpoint_info;
@@ -179,7 +205,7 @@ TEST_F(CudaBufferBackendTest, OnDiscoveringEndpointDoesNotThrow)
 
   std::vector<rmw_topic_endpoint_info_t> existing_endpoints;
   std::unordered_map<std::string, std::string> supported_backends;
-  supported_backends["cuda"] = "version=1.0";
+  supported_backends["cuda"] = CudaBufferBackend::kDescriptorVersion;
 
   EXPECT_NO_THROW(
     backend_->on_discovering_endpoint(
@@ -202,7 +228,7 @@ TEST_F(CudaBufferBackendTest, NoDescriptorForUnknownSubscriber)
 
   std::vector<rmw_topic_endpoint_info_t> existing_endpoints;
   std::unordered_map<std::string, std::string> supported_backends;
-  supported_backends["cuda"] = "";
+  supported_backends["cuda"] = CudaBufferBackend::kDescriptorVersion;
   auto result = backend_->on_discovering_endpoint(
     endpoint_info, existing_endpoints, supported_backends);
   EXPECT_FALSE(result.first);
@@ -326,6 +352,171 @@ TEST_F(CudaBufferBackendTest, UncachedDecisionIsCached)
   EXPECT_EQ(manager->get_uid(), after.uid);
   EXPECT_EQ(manager->get_device_id(), after.device_id);
   EXPECT_EQ(nullptr, second);
+}
+
+// Needs a VMM IPC-capable device. What a subscriber can import is decided per
+// storage backend: a peer that advertises only NvSci gets no descriptor for a
+// VMM buffer, while one that advertises VMM does.
+TEST_F(CudaBufferBackendTest, DescriptorOnlyForBackendsThePeerImports)
+{
+  if (!cuda_buffer_backend::vmm_ipc_supported()) {
+    GTEST_SKIP() << "needs an IPC-capable CUDA device";
+  }
+  using cuda_buffer_backend::StorageKind;
+  using cuda_buffer_backend::storage_kind_bit;
+
+  auto manager = HostEndpointManager::get_instance(0);
+  struct Case
+  {
+    uint8_t gid_byte;
+    uint32_t kinds;
+    bool expect_descriptor;
+  };
+  const Case cases[] = {
+    {0x6d, storage_kind_bit(StorageKind::NvSci), false},
+    {0x6e, storage_kind_bit(StorageKind::Vmm), true},
+  };
+
+  for (const Case & c : cases) {
+    int ready[2];
+    int done[2];
+    pid_t pid = start_peer(c.gid_byte, false, 0, ready, done, static_cast<int>(c.kinds));
+    ASSERT_GE(pid, 0);
+
+    char byte = 0;
+    const bool registered = read(ready[0], &byte, 1) == 1;
+    host_endpoint_manager::LocalityInfo peer{};
+    std::shared_ptr<void> descriptor;
+    if (registered) {
+      rmw_gid_t gid;
+      gid.implementation_identifier = "";
+      std::memset(gid.data, c.gid_byte, RMW_GID_STORAGE_SIZE);
+      manager->refresh_from_remote();
+      peer = manager->query_endpoint_locality(gid);
+
+      rmw_topic_endpoint_info_t endpoint_info;
+      std::memset(&endpoint_info, 0, sizeof(endpoint_info));
+      endpoint_info.topic_type = "test_type";
+      endpoint_info.endpoint_type = RMW_ENDPOINT_SUBSCRIPTION;
+      std::memset(endpoint_info.endpoint_gid, c.gid_byte, sizeof(endpoint_info.endpoint_gid));
+
+      CudaBufferImpl<uint8_t> impl(1024, StorageKind::Vmm);
+      descriptor = backend_->create_descriptor_with_endpoint(&impl, endpoint_info);
+    }
+
+    close(ready[0]);
+    close(done[1]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    ASSERT_TRUE(registered);
+    ASSERT_TRUE(peer.found);
+    EXPECT_EQ(c.kinds, peer.storage_kinds);
+    EXPECT_EQ(c.expect_descriptor, descriptor != nullptr) << "peer kinds " << c.kinds;
+  }
+}
+
+// Needs a VMM IPC-capable device. Two same-host peers that can import VMM
+// differ only in the descriptor version they advertise. The one with this
+// build's version gets a descriptor holding just the VMM entry; the one
+// without a version (a build from before it existed) gets the CPU path.
+TEST_F(CudaBufferBackendTest, DescriptorOnlyForPeersWithThisDescriptorVersion)
+{
+  if (!cuda_buffer_backend::vmm_ipc_supported()) {
+    GTEST_SKIP() << "needs an IPC-capable CUDA device";
+  }
+  using cuda_buffer_backend::StorageKind;
+  using cuda_buffer_backend::storage_kind_bit;
+
+  struct Case
+  {
+    uint8_t gid_byte;
+    const char * metadata;
+    bool expect_descriptor;
+  };
+  const Case cases[] = {
+    {kVersionedPeerGidByte, CudaBufferBackend::kDescriptorVersion, true},
+    {kUnversionedPeerGidByte, "", false},
+  };
+
+  for (const Case & c : cases) {
+    int ready[2];
+    int done[2];
+    // VMM only, so that no NvSci channel is opened to the peer.
+    pid_t pid = start_peer(
+      c.gid_byte, false, 0, ready, done, static_cast<int>(storage_kind_bit(StorageKind::Vmm)));
+    ASSERT_GE(pid, 0);
+
+    char byte = 0;
+    const bool registered = read(ready[0], &byte, 1) == 1;
+    std::pair<bool, std::vector<std::set<uint32_t>>> discovered{};
+    std::shared_ptr<void> descriptor;
+    if (registered) {
+      rmw_topic_endpoint_info_t endpoint_info;
+      std::memset(&endpoint_info, 0, sizeof(endpoint_info));
+      endpoint_info.topic_type = "test_type";
+      endpoint_info.endpoint_type = RMW_ENDPOINT_SUBSCRIPTION;
+      std::memset(endpoint_info.endpoint_gid, c.gid_byte, sizeof(endpoint_info.endpoint_gid));
+
+      std::vector<rmw_topic_endpoint_info_t> existing_endpoints;
+      std::unordered_map<std::string, std::string> supported_backends;
+      supported_backends["cuda"] = c.metadata;
+      discovered = backend_->on_discovering_endpoint(
+        endpoint_info, existing_endpoints, supported_backends);
+
+      CudaBufferImpl<uint8_t> impl(1024, StorageKind::Vmm);
+      descriptor = backend_->create_descriptor_with_endpoint(&impl, endpoint_info);
+    }
+
+    close(ready[0]);
+    close(done[1]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+
+    ASSERT_TRUE(registered);
+    EXPECT_EQ(c.expect_descriptor, discovered.first) << "metadata '" << c.metadata << "'";
+    ASSERT_EQ(c.expect_descriptor, descriptor != nullptr) << "metadata '" << c.metadata << "'";
+    if (descriptor) {
+      const auto & d = *std::static_pointer_cast<CudaBufferDescriptor>(descriptor);
+      EXPECT_EQ(CudaBufferDescriptor::STORAGE_KIND_VMM, d.storage_kind);
+      EXPECT_EQ(1024u, d.size);
+      EXPECT_NE(0u, d.ipc_uid);
+      ASSERT_EQ(1u, d.vmm.size());
+      EXPECT_TRUE(d.nvsci.empty());
+      EXPECT_EQ(static_cast<int32_t>(getpid()), d.vmm[0].pid);
+      EXPECT_FALSE(d.vmm[0].socket_path.empty());
+    }
+  }
+}
+
+// Needs a CUDA device. A descriptor that names a backend but carries no entry
+// for it is dropped like a failed import: the subscriber gets an empty buffer
+// instead of an exception out of the RMW.
+TEST_F(CudaBufferBackendTest, DescriptorWithoutBackendEntryIsDropped)
+{
+  int device_count = 0;
+  if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+    (void)cudaGetLastError();
+    GTEST_SKIP() << "needs a CUDA device";
+  }
+  rmw_topic_endpoint_info_t endpoint_info;
+  std::memset(&endpoint_info, 0, sizeof(endpoint_info));
+
+  for (uint8_t kind : {CudaBufferDescriptor::STORAGE_KIND_VMM,
+      CudaBufferDescriptor::STORAGE_KIND_NVSCI, uint8_t{0xff}})
+  {
+    CudaBufferDescriptor descriptor;
+    descriptor.size = 1024;
+    descriptor.element_type_name = typeid(uint8_t).name();
+    descriptor.storage_kind = kind;
+
+    std::unique_ptr<void, void (*)(void *)> impl{nullptr, [](void *) {}};
+    ASSERT_NO_THROW(impl = backend_->from_descriptor_with_endpoint(&descriptor, endpoint_info))
+      << "kind " << static_cast<int>(kind);
+    ASSERT_NE(nullptr, impl.get());
+    EXPECT_EQ(0u, static_cast<rosidl::BufferImplBase<uint8_t> *>(impl.get())->size())
+      << "kind " << static_cast<int>(kind);
+  }
 }
 
 int main(int argc, char ** argv)
